@@ -1,0 +1,5 @@
+terraform 1.16.6
+terragrunt 0.83.2
+kubectl 1.25.15
+helm 3.8.1
+sops 3.7.3
