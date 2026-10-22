@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  role_name: docker
+  author: unserkai
+  description: Installiert Docker Engine und das Compose-Plugin aus dem offiziellen Repository
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - bullseye
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - docker
+    - containers
+dependencies: []

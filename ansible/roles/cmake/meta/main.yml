@@ -1,0 +1,20 @@
+---
+galaxy_info:
+  role_name: cmake
+  author: unserkai
+  description: Installiert CMake und grundlegende Build-Werkzeuge
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - bullseye
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - development
+    - cmake
+dependencies: []

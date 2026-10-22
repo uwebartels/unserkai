@@ -1,0 +1,17 @@
+---
+# Liste der verwalteten Benutzer. Beispiel:
+# users_managed:
+#   - name: uwe
+#     comment: "Uwe Bartels"
+#     sudo: true
+#     groups: [developers]
+#     password: "$6$..."          # optionaler Passwort-Hash
+#     ssh_authorized_keys: []     # Liste oeffentlicher SSH-Keys
+users_managed: []
+
+users_default_shell: /bin/bash
+users_default_sudo: true
+users_sudo_group: "{{ 'wheel' if ansible_os_family == 'RedHat' else 'sudo' }}"
+
+# true: sudo ohne Passwort (nur sinnvoll, wenn kein Passwort-Hash gesetzt ist).
+users_passwordless_sudo: false

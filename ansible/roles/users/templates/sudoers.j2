@@ -1,0 +1,1 @@
+{{ item.name }} ALL=(ALL) {% if item.passwordless_sudo | default(users_passwordless_sudo) %}NOPASSWD: {% endif %}ALL

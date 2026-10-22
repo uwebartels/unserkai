@@ -1,6 +1,12 @@
 # Mac
 .DS_Store
 
+# Python / Ansible tooling
+.venv/
+ansible/.ansible/
+ansible/collections/
+*.retry
+
 # other
 terraform.gnupg.tgz
 bootstrap/.gnupg

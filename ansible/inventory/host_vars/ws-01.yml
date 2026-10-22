@@ -1,0 +1,51 @@
+---
+# Beispielmaschine mit vier vorkonfigurierten Benutzern, Docker und CMake.
+#
+# Die Adresse und der Bootstrap-Benutzer muessen an die eigene Umgebung
+# angepasst werden. Der Bootstrap-Benutzer benoetigt sudo-Rechte und einen
+# funktionierenden SSH-Zugang (Key oder Passwort via --ask-pass).
+
+ansible_host: 203.0.113.10 # TODO: echte IP oder DNS-Namen eintragen
+ansible_user: ansible
+# ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+
+# Optional: Passwort-Hash pro Benutzer (z. B. via "mkpasswd -m sha-512").
+# Ohne Passwort sind die Konten passwortgesperrt; der Login erfolgt per SSH-Key.
+users_managed:
+  - name: uwe
+    comment: "Uwe Bartels"
+    sudo: true
+    # Die Keys werden aus ansible/files/ssh_keys/<name>.pub gelesen.
+    # Fehlt die Datei, wird der Benutzer ohne Key angelegt.
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/uwe.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+  - name: axel
+    comment: "Axel"
+    sudo: true
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/axel.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+  - name: nic
+    comment: "Nic"
+    sudo: true
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/nic.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+  - name: martin
+    comment: "Martin"
+    sudo: true
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/martin.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+
+# Ohne Passwort-Hash ist sudo sonst nicht nutzbar. Bei produktiven Maschinen
+# besser Passwort-Hashes hinterlegen und diesen Wert auf false setzen.
+users_passwordless_sudo: true
+
+# Diese Benutzer werden zusaetzlich in die Gruppe "docker" aufgenommen.
+docker_users:
+  - uwe
+  - axel
+  - nic
+  - martin

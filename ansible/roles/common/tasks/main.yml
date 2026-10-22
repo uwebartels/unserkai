@@ -1,0 +1,39 @@
+---
+- name: Unterstuetzte Distribution pruefen
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+    fail_msg: >-
+      Diese Rolle unterstuetzt nur Debian und Ubuntu.
+      Gefunden: {{ ansible_distribution }} {{ ansible_distribution_version }}
+    quiet: true
+
+- name: Paketindex aktualisieren
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Vorhandene Pakete aktualisieren
+  ansible.builtin.apt:
+    upgrade: safe
+  when: common_upgrade_packages | bool
+
+- name: Basispakete installieren
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+
+- name: Zeitzone ueber /etc/localtime setzen
+  ansible.builtin.file:
+    src: "/usr/share/zoneinfo/{{ common_timezone }}"
+    dest: /etc/localtime
+    state: link
+    force: true
+
+- name: Zeitzone in /etc/timezone eintragen
+  ansible.builtin.copy:
+    content: "{{ common_timezone }}\n"
+    dest: /etc/timezone
+    owner: root
+    group: root
+    mode: "0644"

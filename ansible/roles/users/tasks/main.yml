@@ -1,0 +1,54 @@
+---
+- name: Benutzerkonfiguration pruefen
+  ansible.builtin.assert:
+    that:
+      - users_managed is sequence
+      - users_managed | length > 0
+      - users_managed | rejectattr('name', 'defined') | list | length == 0
+    fail_msg: >-
+      users_managed muss eine nicht-leere Liste von Objekten mit
+      mindestens dem Attribut "name" sein.
+    quiet: true
+
+- name: Sudo-Gruppe sicherstellen
+  ansible.builtin.group:
+    name: "{{ users_sudo_group }}"
+    state: present
+
+- name: Benutzerkonten anlegen
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    comment: "{{ item.comment | default('') }}"
+    shell: "{{ item.shell | default(users_default_shell) }}"
+    groups: >-
+      {{ (([users_sudo_group] if (item.sudo | default(users_default_sudo)) else [])
+         + (item.groups | default([]))) | unique }}
+    append: true
+    create_home: true
+    password: "{{ item.password | default(omit) }}"
+    state: present
+  loop: "{{ users_managed }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Sudoers-Eintraege konfigurieren
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: "/etc/sudoers.d/90-ansible-{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+  loop: "{{ users_managed }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.sudo | default(users_default_sudo)
+
+- name: SSH-Keys der Benutzer hinterlegen
+  ansible.posix.authorized_key:
+    user: "{{ item.0.name }}"
+    key: "{{ item.1 }}"
+    state: present
+  loop: "{{ users_managed | subelements('ssh_authorized_keys', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.name }}"

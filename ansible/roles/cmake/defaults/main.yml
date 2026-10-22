@@ -1,0 +1,12 @@
+---
+cmake_packages:
+  - cmake
+
+# Sinnvolle Werkzeuge fuer C/C++-Projekte zusaetzlich installieren.
+cmake_install_build_tools: true
+cmake_build_tools_packages:
+  - build-essential
+  - gdb
+  - make
+  - ninja-build
+  - pkg-config

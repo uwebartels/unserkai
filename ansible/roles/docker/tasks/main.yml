@@ -1,0 +1,101 @@
+---
+- name: Unterstuetzte Distribution pruefen
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == 'Debian'
+      - ansible_distribution in ['Debian', 'Ubuntu']
+    fail_msg: >-
+      Die Docker-Rolle unterstuetzt nur Debian und Ubuntu.
+      Gefunden: {{ ansible_distribution }} {{ ansible_distribution_version }}
+    quiet: true
+
+- name: Voraussetzungen fuer das Docker-Repository installieren
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verzeichnis fuer apt-Keyrings anlegen
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Docker-GPG-Key hinterlegen
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+    dest: "{{ docker_apt_keyring }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Docker-apt-Repository einrichten
+  ansible.builtin.apt_repository:
+    repo: "{{ docker_apt_repository }}"
+    filename: docker
+    state: present
+    update_cache: true
+
+- name: Docker-Pakete installieren
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+  notify: Docker neu starten
+
+- name: Verzeichnis /etc/docker sicherstellen
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Docker-Daemon konfigurieren
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Docker neu starten
+
+- name: Docker-Dienst aktivieren und starten
+  ansible.builtin.systemd:
+    name: "{{ docker_service_name }}"
+    state: "{{ docker_service_state }}"
+    enabled: "{{ docker_service_enabled }}"
+    daemon_reload: true
+
+- name: Benutzer in die Docker-Gruppe aufnehmen
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users }}"
+  when: docker_users | length > 0
+  loop_control:
+    label: "{{ item }}"
+
+- name: Docker-Version ermitteln
+  ansible.builtin.command:
+    cmd: docker --version
+  register: docker_version
+  changed_when: false
+
+- name: Docker-Compose-Version ermitteln
+  ansible.builtin.command:
+    cmd: docker compose version
+  register: docker_compose_version
+  changed_when: false
+
+- name: Installierte Docker-Version anzeigen
+  ansible.builtin.debug:
+    msg:
+      - "{{ docker_version.stdout }}"
+      - "{{ docker_compose_version.stdout }}"

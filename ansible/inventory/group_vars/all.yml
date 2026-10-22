@@ -1,0 +1,12 @@
+---
+# Variablen, die fuer alle Hosts gelten.
+
+# Zeitzone fuer alle Maschinen (siehe common-Rolle).
+common_timezone: Europe/Berlin
+
+# Verzeichnis mit den oeffentlichen SSH-Keys der verwalteten Benutzer.
+# Die Keys werden in host_vars/<hostname>.yml referenziert.
+users_ssh_keys_dir: "{{ playbook_dir }}/../files/ssh_keys"
+
+# Beim ersten Kontakt neuen SSH-Hostkey akzeptieren, danach festhalten.
+ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new"

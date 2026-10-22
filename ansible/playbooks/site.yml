@@ -1,0 +1,16 @@
+---
+- name: Linux-Maschinen konfigurieren
+  hosts: linux
+  gather_facts: true
+  roles:
+    - role: common
+      tags: [common, base]
+    - role: users
+      tags: [users]
+      when: users_managed | default([]) | length > 0
+    - role: docker
+      tags: [docker]
+      when: "'docker_hosts' in group_names"
+    - role: cmake
+      tags: [cmake]
+      when: "'build_hosts' in group_names"
