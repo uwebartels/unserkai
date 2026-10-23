@@ -11,7 +11,7 @@ users_managed: []
 
 users_default_shell: /bin/bash
 users_default_sudo: true
-users_sudo_group: "{{ 'wheel' if ansible_os_family == 'RedHat' else 'sudo' }}"
+users_sudo_group: "{{ 'wheel' if ansible_facts['os_family'] == 'RedHat' else 'sudo' }}"
 
 # true: sudo ohne Passwort (nur sinnvoll, wenn kein Passwort-Hash gesetzt ist).
 users_passwordless_sudo: false

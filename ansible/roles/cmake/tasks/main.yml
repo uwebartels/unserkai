@@ -2,10 +2,10 @@
 - name: Unterstuetzte Distribution pruefen
   ansible.builtin.assert:
     that:
-      - ansible_os_family == 'Debian'
+      - ansible_facts['os_family'] == 'Debian'
     fail_msg: >-
       Diese Rolle unterstuetzt nur Debian und Ubuntu.
-      Gefunden: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
     quiet: true
 
 - name: CMake und optionale Build-Werkzeuge installieren
@@ -17,12 +17,12 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: CMake-Version ermitteln
-  ansible.builtin.command:
-    cmd: cmake --version
-  register: cmake_version
-  changed_when: false
-
-- name: Installierte CMake-Version anzeigen
-  ansible.builtin.debug:
-    msg: "{{ cmake_version.stdout_lines[0] }}"
+# - name: CMake-Version ermitteln
+#   ansible.builtin.command:
+#     cmd: cmake --version
+#   register: cmake_version
+#   #changed_when: true
+#
+# - name: Installierte CMake-Version anzeigen
+#   ansible.builtin.debug:
+#     msg: "{{ cmake_version.stdout_lines[0] }}"

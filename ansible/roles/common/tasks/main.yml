@@ -2,10 +2,10 @@
 - name: Unterstuetzte Distribution pruefen
   ansible.builtin.assert:
     that:
-      - ansible_os_family == 'Debian'
+      - ansible_facts['os_family'] == 'Debian'
     fail_msg: >-
       Diese Rolle unterstuetzt nur Debian und Ubuntu.
-      Gefunden: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
     quiet: true
 
 - name: Paketindex aktualisieren

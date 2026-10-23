@@ -2,11 +2,11 @@
 - name: Unterstuetzte Distribution pruefen
   ansible.builtin.assert:
     that:
-      - ansible_os_family == 'Debian'
-      - ansible_distribution in ['Debian', 'Ubuntu']
+      - ansible_facts['os_family'] == 'Debian'
+      - ansible_facts['distribution'] in ['Debian', 'Ubuntu']
     fail_msg: >-
       Die Docker-Rolle unterstuetzt nur Debian und Ubuntu.
-      Gefunden: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
     quiet: true
 
 - name: Voraussetzungen fuer das Docker-Repository installieren
@@ -29,7 +29,7 @@
 
 - name: Docker-GPG-Key hinterlegen
   ansible.builtin.get_url:
-    url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+    url: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}/gpg"
     dest: "{{ docker_apt_keyring }}"
     owner: root
     group: root
