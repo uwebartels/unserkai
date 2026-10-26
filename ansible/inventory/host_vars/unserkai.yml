@@ -20,18 +20,18 @@ users_managed:
     ssh_authorized_keys: >-
       {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/uwe.pub', errors='ignore') | default('', true)
          | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
-  # - name: axel
-  #   comment: "Axel"
-  #   sudo: true
-  #   ssh_authorized_keys: >-
-  #     {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/axel.pub', errors='ignore') | default('', true)
-  #        | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
-  # - name: nic
-  #   comment: "Nic"
-  #   sudo: true
-  #   ssh_authorized_keys: >-
-  #     {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/nic.pub', errors='ignore') | default('', true)
-  #        | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+  - name: axel
+    comment: "Axel"
+    sudo: true
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/axel.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
+  - name: nic
+    comment: "Nic"
+    sudo: true
+    ssh_authorized_keys: >-
+      {{ lookup('ansible.builtin.file', users_ssh_keys_dir ~ '/nic.pub', errors='ignore') | default('', true)
+         | split('\n') | map('trim') | select('match', '^(ssh-|ecdsa-)') | list }}
   # - name: martin
   #   comment: "Martin"
   #   sudo: true
@@ -46,6 +46,6 @@ users_passwordless_sudo: true
 # Diese Benutzer werden zusaetzlich in die Gruppe "docker" aufgenommen.
 docker_users:
   - uwe
-  # - axel
-  # - nic
+  - axel
+  - nic
   # - martin
