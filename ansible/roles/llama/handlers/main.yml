@@ -1,0 +1,4 @@
+---
+- name: Regenerate Initramfs and Update GRUB
+  ansible.builtin.command:
+    name: "update-initramfs -u -k all && update-grub"

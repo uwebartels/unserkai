@@ -14,3 +14,6 @@
     - role: cmake
       tags: [cmake]
       when: "'build_hosts' in group_names"
+    - role: llama
+      tags: [llama]
+      when: "'docker_hosts' in group_names"

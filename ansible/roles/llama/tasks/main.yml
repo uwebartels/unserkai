@@ -1,0 +1,119 @@
+---
+- name: Unterstuetzte Distribution pruefen
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] == 'Debian'
+      - ansible_facts['distribution'] in ['Debian', 'Ubuntu']
+    fail_msg: >-
+      Die Llama-Rolle unterstuetzt nur Debian und Ubuntu.
+      Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+    quiet: true
+
+- name: Voraussetzungen fuer das Docker-Repository installieren
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install linux-headers package
+  ansible.builtin.apt:
+    pkg: linux-headers-{{ ansible_facts['kernel'] }}
+    state: present
+
+- name: non-free apt-Repository einrichten
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie non-free-firmware contrib
+      deb-src [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie non-free-firmware contrib
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie-security non-free-firmware contrib
+      deb-src [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie-security non-free-firmware contrib
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie-updates non-free-firmware contrib
+      deb-src [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian trixie-updates non-free-firmware contrib
+    filename: non-free
+    state: present
+    update_cache: true
+
+# Download and install a .deb from a URL
+- name: Download application package
+  ansible.builtin.get_url:
+    url: https://developer.download.nvidia.com/compute/cuda/13.4.3/local_installers/cuda-repo-debian13-13-4-local_13.4.3-1_amd64.deb
+    dest: /tmp/cuda-repo-debian13-13-4-local_13.4.3-1_amd64.deb
+    #checksum: sha256:e7f219eab6fe4819cdb5c15b98233dc3420302d9c00883219cd3d896857cf48d
+    mode: '0644'
+
+- name: Install downloaded .deb
+  ansible.builtin.apt:
+    deb: /tmp/cuda-repo-debian13-13-4-local_13.4.3-1_amd64.deb
+
+- name: install key for apt repo
+  ansible.builtin.command:
+    cmd: cp /var/cuda-repo-debian13-13-4-local/cuda-*-keyring.gpg /usr/share/keyrings/
+
+- name: update apt repositories
+  ansible.builtin.command:
+    cmd: apt-get update
+- name: Voraussetzungen fuer das Docker-Repository installieren
+  ansible.builtin.apt:
+    name:
+      - cuda-toolkit-13-4
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+
+#
+# - name: Verzeichnis /etc/docker sicherstellen
+#   ansible.builtin.file:
+#     path: /etc/docker
+#     state: directory
+#     owner: root
+#     group: root
+#     mode: "0755"
+#
+# - name: Docker-Daemon konfigurieren
+#   ansible.builtin.template:
+#     src: daemon.json.j2
+#     dest: /etc/docker/daemon.json
+#     owner: root
+#     group: root
+#     mode: "0644"
+#   notify: Docker neu starten
+#
+# - name: Docker-Dienst aktivieren und starten
+#   ansible.builtin.systemd:
+#     name: "{{ docker_service_name }}"
+#     state: "{{ docker_service_state }}"
+#     enabled: "{{ docker_service_enabled }}"
+#     daemon_reload: true
+#
+# - name: Benutzer in die Docker-Gruppe aufnehmen
+#   ansible.builtin.user:
+#     name: "{{ item }}"
+#     groups: docker
+#     append: true
+#   loop: "{{ docker_users }}"
+#   when: docker_users | length > 0
+#   loop_control:
+#     label: "{{ item }}"
+#
+# - name: Docker-Version ermitteln
+#   ansible.builtin.command:
+#     cmd: docker --version
+#   register: docker_version
+#   changed_when: false
+#
+# - name: Docker-Compose-Version ermitteln
+#   ansible.builtin.command:
+#     cmd: docker compose version
+#   register: docker_compose_version
+#   changed_when: false
+#
+# - name: Installierte Docker-Version anzeigen
+#   ansible.builtin.debug:
+#     msg:
+#       - "{{ docker_version.stdout }}"
+#       - "{{ docker_compose_version.stdout }}"
