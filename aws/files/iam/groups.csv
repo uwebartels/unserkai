@@ -1,0 +1,2 @@
+name,policy_arns,members
+unserkai_everbody,arn:aws:iam::400295622374:policy/UnserkaiUserSelfManagement,<ignored by code!! Just everybody>
