@@ -1,8 +1,15 @@
 # Kai — Plan: Phasen, Aufgaben, Prüfungen
 
-Stand: 2026-11-07 · Status: Vorschlag · Bezug: Sprint 01 in ClickUp (S1-xx), [01 Architektur](01_architektur.md)
+Stand: 2026-11-10 · Bezug: Sprint 01 in ClickUp (S1-xx), [01 Architektur](01_architektur.md)
 
-## Phase 1 — Design, Architektur, Plan (dieser Branch `kai-design`)
+## Stand
+
+- Phase 1 und 2 sind abgeschlossen, und Kai 1.0 läuft seit 07.11. auf `webui1` und `kai1` (PR #14 im Fork, Protokoll dort).
+- Auf `main` steht ein Stand, der auf `webui1` und `kai1` noch nicht ausgerollt ist: die Lehren aus dem Deployment (7720180, auf den Test-VMs geprüft), siehe 3.12.
+- Offen in Phase 3 sind 3.6–3.8 und 3.11, dazu 3.12 und 3.13; die Ergebnisse von 3.5 sind unvollständig belegt.
+- Danach folgt Phase 4, der Pförtner.
+
+## Phase 1 — Design, Architektur, Plan (abgeschlossen)
 
 | Ergebnis | Datei | Zustand |
 |---|---|---|
@@ -39,7 +46,7 @@ Steuerung: `kai-dev` und die Test-VMs liegen im selben abgeschotteten Netz; der 
 
 Abnahme Phase 2.0: `make ping` aus `kai-dev` gegen beide Test-VMs grün.
 
-## Phase 2 — Skript-Entwicklung (Branch `kai-stack`)
+## Phase 2 — Skript-Entwicklung (abgeschlossen 07.11.)
 
 Alles wird in `kai-dev` entwickelt und geprüft, Rollen und Stacks laufen gegen `kai-entry-pre` und `kai-gpu-pre`. Reihenfolge nach Abhängigkeit:
 
@@ -57,28 +64,34 @@ Alles wird in `kai-dev` entwickelt und geprüft, Rollen und Stacks laufen gegen 
 | 2.10 | **Inventory nach Rolle**: Gruppen `kai_entry` (Hosts `kai-entry`, `kai-entry-pre`) und `kai_gpu` (Hosts `kai-gpu`, `kai-gpu-pre`); Benutzerliste nach `group_vars/all.yml`; Stack-Variablen in `group_vars/kai_entry.yml` und `kai_gpu.yml`; `host_vars/kai-entry.yml` und `kai-gpu.yml` nur mit Instanz-ID, `ansible_ssh_common_args` (`ProxyCommand aws ssm start-session … --document-name AWS-StartSSHSession`), Benutzer `admin` und Maschinendaten (VRAM, Modellliste, Kontext); `host_vars/kai-entry-pre.yml` und `kai-gpu-pre.yml` nur mit `ansible_user` und `kai_gpu_enabled: false` (`kai_gpu_endpoint` bleibt der Gruppenwert); private Werte der Test-VMs (`kai_http_proxy`, `kai_extra_hosts`) in einem zweiten, gitignorierten Inventory `ansible/inventory/local/`, das das Makefile als weiteres `-i` anhängt, wenn es existiert; Host `unserkai` entfällt; `playbooks/site.yml` mit je einem Play pro Gruppe | `make syntax`; `make ping` gegen `kai-entry-pre` und `kai-gpu-pre` (SSH); SSM-Weg erst in Phase 3 |
 | 2.11 | **Doku**: `ansible/README.md` um Kai erweitern; `kai/README.md` Kurzanleitung für Nutzer (S1-12) | Review |
 
-Abnahme Phase 2: `./check` grün, beide Stacks auf frischen Test-VMs zweimal durchgelaufen (zweiter Lauf `changed=0`), Kette mit Testmodell antwortet, PR gemergt, Uwe hat die Rollen gelesen.
+Abnahme Phase 2: `./check` grün, beide Stacks auf frischen Test-VMs zweimal durchgelaufen (zweiter Lauf `changed=0`), Kette mit Testmodell antwortet, PR gemergt, Uwe hat die Rollen gelesen. Erfüllt bis auf einen Punkt: Ob Uwe die Rollen gelesen hat, ist nicht festgehalten.
 
 ## Phase 3 — Umsetzung auf den Maschinen
 
 Voraussetzung: Punkte aus [02 §8](02_anforderungen-infrastruktur.md) erfüllt, Snapshot „vor Installation“ von `kai-data` existiert (S1-11).
 
-| # | Schritt | Nachweis |
-|---|---|---|
-| 3.1 | `make ping` über SSM gegen beide Maschinen, `make check` (Dry-Run) | Ausgabe im PR-Kommentar |
-| 3.2 | **kai-entry:** `make deploy LIMIT=webui1 TAGS=common,users,docker`; `.env` anlegen (Brave-Key, `WEBUI_SECRET_KEY`, LiteLLM-Keys, Postgres-Passwort); `make deploy LIMIT=webui1 TAGS=kai_entry` | `docker compose ps` alles `healthy`; `curl localhost:4000/v1/models` antwortet (Modelle gelistet, Backend noch aus) |
-| 3.3 | **kai-gpu:** Instanz starten, `make deploy LIMIT=kai1` | `nvidia-smi` auf dem Host zeigt die T4 und den gepinnten Treiberzweig; `docker run --rm --gpus all debian:trixie-slim nvidia-smi` zeigt die T4; `curl localhost:8080/v1/models` listet `gpt-oss-20b`; von `kai-entry` aus: `curl http://kai1.unserkai.de:8080/v1/models` (DNS und Security Group) |
-| 3.4 | Erster Chat über LiteLLM: `curl` an `localhost:4000/v1/chat/completions` mit Master-Key, dann Browser über SSM-Portweiterleitung auf 3000 | Antwort in < 60 s nach Kaltstart (S1-06) |
-| 3.5 | Vier Konten anlegen, erstes Konto = Admin, Brave-MCP als Werkzeug registrieren, `ENABLE_SIGNUP=false`; in LiteLLM ein Key für Open WebUI, Keys für Harnesses erst bei Bedarf | Screenshot (S1-07) |
-| 3.6 | Modell-Plausibilitätstest (10 deutsche Fragen + 2 Suchaufrufe), FP16-Risiko aus [03](03_modellvorschlag.md) | Tabelle in ClickUp |
-| 3.7 | Snapshot „nach Installation“ von `kai-data`; Stop/Start-Test `kai-gpu`: bei gestoppter GPU-Maschine bleibt Open WebUI nutzbar und meldet das Modell als nicht erreichbar; nach dem Start antwortet der Chat ohne Eingriff auf `kai-entry` | Protokoll (S1-11) |
-| 3.8 | Übergabe an Uwe: Zugangsweg für Nutzer freischalten, vier Personen testen PC + Telefon (S1-09), vier parallele Anfragen messen (S1-10) | Messwerte in ClickUp |
-| 3.10 | Installationsprotokoll + Abweichungen zurück in die Rollen (S1-15), PR | gemergt |
-| 3.11 | **Wechsel-Probe (Kann):** `kai-gpu` einmal durch eine neue Instanz aus demselben Image ersetzen, Volume `kai-models` umhängen, DNS nachziehen, `make deploy LIMIT=kai1` | Dauer gemessen gegen die Tabelle in [01 §3](01_architektur.md); Abweichungen in die Rollen |
+| # | Schritt | Nachweis | Stand |
+|---|---|---|---|
+| 3.1 | `make ping` über SSM gegen beide Maschinen, `make check` (Dry-Run) | Ausgabe im PR-Kommentar | erledigt 07.11.; `make check` bricht auf frischer Maschine in `users` ab (Check-Modus, Benutzer fehlen noch), kein Deploy-Fehler |
+| 3.2 | **kai-entry:** `make deploy LIMIT=webui1 TAGS=common,users,docker`; `.env` anlegen (Brave-Key, `WEBUI_SECRET_KEY`, LiteLLM-Keys, Postgres-Passwort); `make deploy LIMIT=webui1 TAGS=kai_entry` | `docker compose ps` alles `healthy`; `curl localhost:4000/v1/models` antwortet (Modelle gelistet, Backend noch aus) | erledigt 07.11.; `.env` über `kai_entry_env_seed`, zweiter Lauf `changed=0` |
+| 3.3 | **kai-gpu:** Instanz starten, `make deploy LIMIT=kai1` | `nvidia-smi` auf dem Host zeigt die T4 und den gepinnten Treiberzweig; `docker run --rm --gpus all debian:trixie-slim nvidia-smi` zeigt die T4; `curl localhost:8080/v1/models` listet `gpt-oss-20b`; von `kai-entry` aus: `curl http://kai1.unserkai.de:8080/v1/models` (DNS und Security Group) | erledigt 07.11.; Treiber 620.70.06, Image `unified-cuda` (CUDA 12.9), weil CUDA 13 keinen Kernel für die T4 hat |
+| 3.4 | Erster Chat über LiteLLM: `curl` an `localhost:4000/v1/chat/completions` mit Master-Key, dann Browser über SSH-Tunnel durch SSM auf 3000 ([06](06_zugang.md)) | Antwort in < 60 s nach Kaltstart (S1-06) | Chat erledigt 07.11., ≈ 59 Tokens/s; Ziel verfehlt: erste Antwort nach Kaltstart 98 s, Abhilfe in Phase 4 |
+| 3.5 | Vier Konten anlegen, erstes Konto = Admin, Brave-MCP als Werkzeug registrieren, `ENABLE_SIGNUP=false`; in LiteLLM ein Key für Open WebUI, Keys für Harnesses erst bei Bedarf | Screenshot (S1-07) | Admin-Konto, LiteLLM-Key, Brave-Werkzeug und geschlossene Registrierung per `kai-bootstrap` erledigt 07.11.; die drei weiteren Konten und der Screenshot sind nicht belegt |
+| 3.6 | Modell-Plausibilitätstest (10 deutsche Fragen + 2 Suchaufrufe), FP16-Risiko aus [03](03_modellvorschlag.md) | Tabelle in ClickUp | offen |
+| 3.7 | Snapshot „nach Installation“ von `kai-data`; Stop/Start-Test `kai-gpu`: bei gestoppter GPU-Maschine bleibt Open WebUI nutzbar und meldet das Modell als nicht erreichbar; nach dem Start antwortet der Chat ohne Eingriff auf `kai-entry` | Protokoll (S1-11) | offen |
+| 3.8 | Übergabe an Uwe: Zugangsweg für Nutzer freischalten, vier Personen testen PC + Telefon (S1-09), vier parallele Anfragen messen (S1-10) | Messwerte in ClickUp | Zugangsweg erledigt: Client VPN in Betrieb (`aws/vpn/`, TCP, SAML); Tests durch vier Personen und Messung offen |
+| 3.10 | Installationsprotokoll + Abweichungen zurück in die Rollen (S1-15), PR | gemergt | erledigt (7720180, PR #14) |
+| 3.11 | **Wechsel-Probe (Kann):** `kai-gpu` einmal durch eine neue Instanz aus demselben Image ersetzen, Volume `kai-models` umhängen, DNS nachziehen, `make deploy LIMIT=kai1` | Dauer gemessen gegen die Tabelle in [01 §3](01_architektur.md); Abweichungen in die Rollen | offen |
+| 3.12 | **Stand von `main` ausrollen:** `make check`, dann `make deploy LIMIT=webui1` und `make deploy LIMIT=kai1`; neue Stücke: Platzprüfung und Aufräumen der Images, Modell vorladen, `kai_extra_hosts` | zweiter Lauf `changed=0`; `kai-smoke --target entry` und `--target gpu` grün | offen; Root von `kai1` steht in Terraform weiter auf 30 GB (offener Punkt 3) |
+| 3.13 | **`kai-bootstrap` ohne Passwortdatei:** Startpasswörter einmal anzeigen, beim zweiten Lauf `KAI_ADMIN_PASSWORD` oder eine Abfrage; zuerst auf `kai-entry-pre` testen, dann nach `/usr/local/sbin` auf `webui1` kopieren; erst wenn das Admin-Passwort in der KeePass liegt, `/opt/kai/accounts.txt` mit `shred -u` löschen | auf `kai-entry-pre` zweimal gelaufen, beim zweiten nichts geändert; auf `webui1` gibt es kein `accounts.txt` mehr | Code in `main` (PR #17), laut PR auf den Pre-VMs geprüft; nicht ausgerollt |
+
+## Phase 4 — Pförtner: `kai1` bei Bedarf starten, nach Leerlauf stoppen
+
+Das Konzept steht in [05](05_vorschlag-auto-stop.md); Rolle `kai_pfoertner` und `kai/bin/kai-pfoertner` sind mit PR #17 in `main`, laut PR auf den Pre-VMs geprüft, aber nicht ausgerollt. Uwe hat die Instanzrolle von `webui1` am 10.11. erweitert ([aws/webui1/iam.tf](../../aws/webui1/iam.tf)): `ec2:StartInstances`/`StopInstances` gelten nur für die Instanz-ID von `kai1` statt per Tag, `ec2:DescribeInstances` für alle Instanzen. Der CloudWatch-Alarm als Sicherheitsnetz fehlt.
 
 ## Arbeitsweise
 
-- **Branches:** `kai-design` (Phase 1) → `kai-stack` (Phase 2) → `kai-deploy` (Protokolle/Fixes Phase 3). Kleine PRs, Uwe mergt.
+- **Branches:** ein Branch je Thema (`kai-<thema>`), kleine PRs.
 - **Fork:** Der Agent pusht nur in Axels Fork; Axel prüft dort und öffnet den Pull Request an dieses Repo. Direkte Commits hierher erst nach Absprache mit Uwe.
 - **In `kai-dev`:** Clone dieses Repos, VSCode per Remote-SSH. Gate `check` vor jedem Commit; Claude Code, Ansible, yamllint, gitleaks und `gh` liegen in `kai-dev` (Phase 2.0). Das AWS-Profil kommt erst in Phase 3 dazu und liegt nur dort; Brave-Key, `WEBUI_SECRET_KEY` und LiteLLM-Keys nie in `kai-dev`.
 - **Test-Ziele `kai-entry-pre` und `kai-gpu-pre`:** jeder Deployment-Test startet auf frischem Overlay; das Stoppen gehört zu jedem Test, auch nach einem Fehlschlag.
@@ -89,13 +102,10 @@ Voraussetzung: Punkte aus [02 §8](02_anforderungen-infrastruktur.md) erfüllt, 
 
 ## Offene Punkte (Entscheidung Uwe / Team)
 
-1. Zugangsweg Nutzer: VPN-Technik oder öffentlich mit TLS ([02 §5](02_anforderungen-infrastruktur.md))
-2. `kai-entry` (`webui1`): `t3.medium`, Root 30 GB, Volume `kai-data`, Tag `kai:role=entry` ([02 §1, §2](02_anforderungen-infrastruktur.md))
-3. Egress: heute offen ohne Allowlist; auf die Ziele in [02 §3](02_anforderungen-infrastruktur.md) einschränken oder offen lassen
-4. Session-Rolle um `AWS-StartSSHSession` erweitern; Axels Key bei `admin` auf beiden Maschinen ([02 §6](02_anforderungen-infrastruktur.md))
-5. Private DNS-Zone `unserkai.de` mit `webui1` und `kai1` (heute ersetzt durch `kai_extra_hosts`); Security Groups per Gruppenreferenz ([02 §4](02_anforderungen-infrastruktur.md))
-6. `kai-gpu` (`kai1`): Root von 30 auf 50 GB; 30 GB liefen beim Wechsel des CUDA-Images voll ([02 §1.7](02_anforderungen-infrastruktur.md))
-7. Budget-Grenze für Betriebsstunden von `kai-gpu` und den Dauerbetrieb von `kai-entry` (S1-03)
-8. Datenschutz-Regeln für den Prototyp festhalten (S1-04): wer ist Admin in Open WebUI, Aufbewahrung von Chats, ob und wann externe Modelle über LiteLLM freigegeben werden
-9. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung); für den Start so akzeptiert. Das frühere `/opt/kai/accounts.txt` mit Klartext-Startpasswörtern schreibt `kai-bootstrap` nicht mehr; auf `webui1` ist die Altdatei nach Übertrag in die KeePass zu löschen (`shred -u`)
-10. Auto-Stop von `kai1` nach Leerlauf und nächtlicher Stopp: Vorschlag in [05](05_vorschlag-auto-stop.md)
+1. Egress: heute offen ohne Allowlist; auf die Ziele in [02 §3](02_anforderungen-infrastruktur.md) einschränken oder offen lassen.
+2. Private DNS-Zone `unserkai.de` mit `webui1` und `kai1` (heute ersetzt durch `kai_extra_hosts`); Security Groups per Gruppenreferenz ([02 §4](02_anforderungen-infrastruktur.md)).
+3. `kai-gpu` (`kai1`): Root von 30 auf 50 GB, beantragt; Terraform steht weiter auf 30 GB, und 30 GB liefen beim Wechsel des CUDA-Images voll ([02 §1.7](02_anforderungen-infrastruktur.md)).
+4. Budget-Grenze für die Betriebsstunden von `kai-gpu` und den Dauerbetrieb von `kai-entry` (S1-03).
+5. Datenschutz-Regeln für den Prototyp festhalten (S1-04): wer in Open WebUI Admin ist, wie lange Chats aufbewahrt werden, ob und wann externe Modelle über LiteLLM freigegeben werden.
+6. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung); für den Start so akzeptiert. `accounts.txt` fällt mit 3.13 weg.
+7. Pförtner (Phase 4): Entscheidungen aus [05](05_vorschlag-auto-stop.md); ob Uwe den CloudWatch-Alarm noch anlegt, ist offen.

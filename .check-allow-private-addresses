@@ -9,5 +9,5 @@
 ^aws/(kai1|webui1|modules/ec2instance)/firewall_rules\.csv:[0-9]+:[a-z-]+,(ingress|egress),[A-Za-z0-9-]+,-?[0-9]+,-?[0-9]+,10\.0\.0\.0/(8|16)$
 
 # AWS Client VPN (Uwe's Terraform): VPC behind the VPN and the client address pool
-^aws/common\.hcl:[0-9]+: *vpn_vpc_cidr *= *"172\.16\.0\.0/24"$
+^aws/common\.hcl:[0-9]+: *vpn_vpc_cidr *= *"172\.16\.0\.0/22"$
 ^aws/modules/vpn/variables\.tf:[0-9]+: *default *= *"10\.250\.0\.0/22"$
