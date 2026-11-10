@@ -39,7 +39,7 @@ Ablauf auf einer frischen Maschine: [ansible/README.md, „Kai: Arbeitsablauf“
 |---|---|
 | `kai-pin-images` | Image-Tags mit Digest festschreiben (`--check` meldet ungepinnte Images) |
 | `kai-models-pull` | Modelle aus `kai/models.list` laden, mit Prüfsumme |
-| `kai-bootstrap` | Ersteinrichtung auf `kai-entry`: LiteLLM-Key, Admin-Konto, Verbindung, Konten aus einer Liste, Brave-Werkzeug, Registrierung schließen; wiederholbar |
+| `kai-bootstrap` | Ersteinrichtung auf `kai-entry`: LiteLLM-Key, Admin-Konto, Verbindung, Konten aus einer Liste, Brave-Werkzeug, Registrierung schließen; wiederholbar; zeigt neue Startpasswörter einmalig an (in die KeePass), bei Wiederholung Admin-Passwort aus `KAI_ADMIN_PASSWORD` oder Abfrage |
 | `kai-smoke` | Rauchtest nach dem Deployment: Healthchecks, Modellliste, ein Chat durch die ganze Kette |
 | `kai-gpu` | `kai-gpu` per AWS-CLI starten, stoppen, abfragen (`status\|start\|stop`); Profil und Instanz-ID ausdrücklich angeben |
 

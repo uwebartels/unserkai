@@ -98,7 +98,7 @@ Ein Sprachmodell **speichert nichts**. Was gespeichert wird (Chats, Uploads), li
 - Virtuelle Keys für Nutzer und Harnesses entstehen in LiteLLM (UI oder API) und liegen in der Postgres-Datenbank, nicht in `.env`.
 - `kai-gpu` hat kein Geheimnis: llama-swap verlangt keinen Key, der Schutz ist die Security Group.
 - Compose liest `.env` automatisch; Container bekommen Keys per `env_file`, nicht auf der Kommandozeile (sonst stehen sie in `docker inspect` und der Shell-History).
-- Ansible kopiert `.env` **nicht**; die Rolle prüft nur, dass die Datei existiert, und bricht sonst mit Hinweis ab. Master-Key, Brave-Key und `WEBUI_SECRET_KEY` zusätzlich in der Team-KeePass (`unserkai.kdbx`).
+- Ansible kopiert `.env` **nicht**; die Rolle prüft nur, dass die Datei existiert, und bricht sonst mit Hinweis ab. Master-Key, Brave-Key und `WEBUI_SECRET_KEY` zusätzlich in der Team-KeePass (`unserkai.kdbx`), das Admin-Passwort von Open WebUI nur dort.
 
 ### Ressourcen
 

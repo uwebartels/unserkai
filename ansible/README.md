@@ -188,4 +188,4 @@ Weitere Regeln:
 - `make deploy` stellt nach Abweichungen (geänderte Datei, falsche Rechte, gestoppter Container) den Sollzustand wieder her; die Verzeichnisse der Container-Daten (`/opt/kai/data/*`) fasst die Rolle nicht an, denn Besitzer und Rechte setzen die Container selbst.
 - Die Test-VMs beginnen nach jedem Stopp wieder frisch; `make ping|check|deploy` beachten `LIMIT=kai-entry-pre,kai-gpu-pre`, damit die AWS-Hosts (noch ohne Instanz-ID) nicht angesprochen werden.
 - Private Werte der Test-VMs (Proxy, Adressen) stehen nur im gitignorierten Overlay `inventory/local/`.
-- Rollen, die Geheimnisse berühren, gibt es nicht: `.env` und `accounts.txt` auf `kai-entry` (beide 0600) gehören den Menschen und `kai-bootstrap`.
+- Rollen, die Geheimnisse berühren, gibt es nicht: `.env` auf `kai-entry` (0600) gehört den Menschen und `kai-bootstrap`; Startpasswörter zeigt `kai-bootstrap` einmalig an und schreibt sie nirgends hin, sie gehören in die Team-KeePass.

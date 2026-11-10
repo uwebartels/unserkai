@@ -16,6 +16,9 @@ services:
       OPENAI_API_BASE_URL: http://litellm:4000/v1
       OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY}
       ENABLE_OLLAMA_API: "false"
+    # Der Filter "Kai-Status" fragt den Pfoertner auf dem Host (kai-pfoertner, Bridge-Adresse der Maschine).
+    extra_hosts:
+      - "kai-pfoertner:host-gateway"
     ports:
       - "${KAI_WEBUI_BIND:-127.0.0.1}:${KAI_WEBUI_PORT:-3000}:8080"
     volumes:

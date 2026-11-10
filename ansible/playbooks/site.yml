@@ -11,6 +11,8 @@
       tags: [kai_volume, kai_entry]
     - role: docker
       tags: [docker]
+    - role: kai_pfoertner
+      tags: [kai_pfoertner, kai_entry]
     - role: kai_entry
       tags: [kai_entry]
 

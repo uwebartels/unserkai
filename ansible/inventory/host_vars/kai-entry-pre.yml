@@ -9,3 +9,5 @@ kai_volume_required: true
 kai_volume_device: /dev/disk/by-id/virtio-kai-data
 # Test-Seed aus Dummy-Werten (root, 0600), legt der Agent vor dem Lauf an; Nachweis fuer kai_entry_env_seed.
 kai_entry_env_seed: /root/kai-entry.env
+# Test-VM: der Pfoertner startet und stoppt nichts (Trockenlauf), die Gegenstelle gilt als an.
+kai_pfoertner_provider: none

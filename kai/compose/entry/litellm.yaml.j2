@@ -5,7 +5,12 @@ model_list:
   - model_name: {{ m.name }}
     litellm_params:
       model: openai/{{ m.name }}
+{% if kai_pfoertner_enabled | bool %}
+      # Ueber den Pfoertner (startet kai-gpu bei Bedarf); direkt waere {{ kai_gpu_endpoint }}/v1.
+      api_base: http://kai-pfoertner:{{ kai_pfoertner_port }}/{{ kai_pfoertner_machine }}/v1
+{% else %}
       api_base: {{ kai_gpu_endpoint }}/v1
+{% endif %}
       api_key: none
       timeout: {{ kai_litellm_request_timeout }}
       stream_timeout: {{ kai_litellm_request_timeout }}

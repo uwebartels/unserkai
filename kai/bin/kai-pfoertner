@@ -1,0 +1,1092 @@
+#!/usr/bin/env python3
+"""kai-pfoertner: gatekeeper service for GPU machines.
+
+Single-file Python 3 service with stdlib only.  It tracks machine phases,
+starts/stops providers, waits for llama-swap readiness, proxies OpenAI-style
+requests, and optionally wakes machines on login log lines.
+"""
+
+import argparse
+import http.client
+import json
+import logging
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+DEFAULT_CONFIG_PATH = "/etc/kai-pfoertner/config.json"
+DEFAULT_LOGIN_REGEX = r"(?:POST /api/v1/auths/signin|GET /api/models)[ ?]"
+MAX_BODY_BYTES = 64 * 1024 * 1024
+
+LABELS = {
+    "off": "gestoppt",
+    "start": "Start angefragt",
+    "boot": "Maschine bootet",
+    "service": "Dienst startet",
+    "model": "Modell wird geladen",
+    "ready": "bereit",
+    "stopping": "stoppt",
+    "error": "Fehler",
+}
+
+BANDS = {
+    "start": (0, 10),
+    "boot": (10, 35),
+    "service": (35, 50),
+    "model": (50, 95),
+    "ready": (100, 100),
+}
+
+LATER_PHASES = {
+    "start": ["boot", "service", "model"],
+    "boot": ["service", "model"],
+    "service": ["model"],
+    "model": [],
+    "ready": [],
+}
+
+HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+}
+
+
+class CapacityError(Exception):
+    """Raised when the provider cannot start an instance due to capacity."""
+
+
+def now_wall():
+    return time.time()
+
+
+def now_mono():
+    return time.monotonic()
+
+
+def load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logging.warning("state file %s unreadable: %s", path, exc)
+        return None
+
+
+def atomic_write_json(path, data):
+    try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logging.warning("state file %s write failed: %s", path, exc)
+
+
+def http_get_json(url, timeout=3.0):
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"HTTP {resp.status}")
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def http_get_ok(url, timeout=3.0):
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+class NoneProvider:
+    def state(self, iid):
+        return "running"
+
+    def start(self, iid):
+        logging.info("dry-run: would start")
+
+    def stop(self, iid):
+        logging.info("dry-run: would stop")
+
+
+class SimProvider:
+    def __init__(self, cfg):
+        sim = cfg.get("sim", {})
+        self.boot_seconds = float(sim.get("boot_seconds", 20))
+        self.stop_seconds = float(sim.get("stop_seconds", 10))
+        self.capacity_failures = int(sim.get("capacity_failures", 0))
+        self.lock = threading.Lock()
+        self.states = {}
+
+    def _current(self, iid):
+        state, ts = self.states.get(iid, ("stopped", now_mono()))
+        if state == "pending" and now_mono() - ts >= self.boot_seconds:
+            state = "running"
+            self.states[iid] = (state, ts)
+        elif state == "stopping" and now_mono() - ts >= self.stop_seconds:
+            state = "stopped"
+            self.states[iid] = (state, ts)
+        return state
+
+    def state(self, iid):
+        with self.lock:
+            return self._current(iid)
+
+    def start(self, iid):
+        with self.lock:
+            current = self._current(iid)
+            if current != "stopped":
+                raise RuntimeError(f"sim: instance {iid} is not stopped")
+            if self.capacity_failures > 0:
+                self.capacity_failures -= 1
+                raise CapacityError("sim: insufficient capacity")
+            self.states[iid] = ("pending", now_mono())
+
+    def stop(self, iid):
+        with self.lock:
+            current = self._current(iid)
+            if current in ("running", "pending"):
+                self.states[iid] = ("stopping", now_mono())
+
+
+class AwsProvider:
+    def __init__(self, cfg):
+        self.region = cfg.get("region", "eu-central-1")
+        self._client = None
+
+    def client(self):
+        if self._client is None:
+            import boto3  # lazy, only for provider aws
+
+            self._client = boto3.client("ec2", region_name=self.region)
+        return self._client
+
+    def state(self, iid):
+        resp = self.client().describe_instances(InstanceIds=[iid])
+        return resp["Reservations"][0]["Instances"][0]["State"]["Name"]
+
+    def start(self, iid):
+        try:
+            self.client().start_instances(InstanceIds=[iid])
+        except Exception as exc:
+            if "InsufficientInstanceCapacity" in str(exc):
+                raise CapacityError(str(exc)) from exc
+            raise
+
+    def stop(self, iid):
+        try:
+            self.client().stop_instances(InstanceIds=[iid])
+        except Exception as exc:
+            if "InsufficientInstanceCapacity" in str(exc):
+                raise CapacityError(str(exc)) from exc
+            raise
+
+
+def make_provider(cfg):
+    provider = cfg.get("provider", "none")
+    if provider == "none":
+        return NoneProvider()
+    if provider == "sim":
+        return SimProvider(cfg)
+    if provider == "aws":
+        return AwsProvider(cfg)
+    raise ValueError(f"unknown provider {provider!r}")
+
+
+class Machine:
+    def __init__(self, name, cfg, provider, state_file):
+        self.name = name
+        self.provider = provider
+        self.state_file = state_file
+        self.instance_id = cfg.get("instance_id", name)
+        self.endpoint = cfg["endpoint"].rstrip("/")
+        self.models = list(cfg.get("models", []))
+        self.default_model = cfg.get("default_model") or (self.models[0] if self.models else None)
+        self.idle_minutes = float(cfg.get("idle_minutes", 30))
+        self.min_runtime_minutes = float(cfg.get("min_runtime_minutes", 10))
+        self.wake_on_login = bool(cfg.get("wake_on_login", True))
+        self.start_timeout_seconds = float(cfg.get("start_timeout_seconds", 360))
+        self.capacity_retry_seconds = float(cfg.get("capacity_retry_seconds", 600))
+        self.capacity_wait_seconds = float(cfg.get("capacity_wait_seconds", 30))
+        self.model_load_timeout_seconds = float(cfg.get("model_load_timeout_seconds", 600))
+        self.poll_seconds = float(cfg.get("poll_seconds", 2))
+
+        self.cond = threading.Condition()
+        self.phase = "off"
+        self.phase_since = now_wall()
+        self.error = None
+        self.last_activity = now_wall()
+        self.inflight = 0
+        self.hold_until = 0.0
+        self.started_at = None
+        self.wake_thread = None
+
+        self.expected = {"start": 5, "boot": 45, "service": 20, "model": 100}
+        self.loaded_cache = []
+        self.loaded_cache_ts = 0.0
+
+    def resolve_model(self, model):
+        if model in self.models:
+            return model
+        return self.default_model
+
+    def _url(self, path):
+        return self.endpoint + path
+
+    def _health_ok(self):
+        return http_get_ok(self._url("/health"), timeout=3)
+
+    def _fetch_running(self):
+        data = http_get_json(self._url("/running"), timeout=3)
+        loaded = []
+        if isinstance(data, dict):
+            for entry in data.get("running", []):
+                if isinstance(entry, dict) and entry.get("state") == "ready":
+                    model = entry.get("model")
+                    if model:
+                        loaded.append(model)
+            if not loaded:
+                for entry in data.get("models", []):
+                    if isinstance(entry, str):
+                        loaded.append(entry)
+        return loaded
+
+    def loaded_models(self, max_age=2.0):
+        with self.cond:
+            if max_age > 0 and now_mono() - self.loaded_cache_ts <= max_age:
+                return list(self.loaded_cache)
+        try:
+            loaded = self._fetch_running()
+        except Exception as exc:
+            logging.debug("%s: /running failed: %s", self.name, exc)
+            with self.cond:
+                return list(self.loaded_cache)
+        with self.cond:
+            self.loaded_cache = loaded
+            self.loaded_cache_ts = now_mono()
+            return list(loaded)
+
+    def invalidate_loaded_cache(self):
+        with self.cond:
+            self.loaded_cache_ts = 0.0
+
+    def is_loaded(self, model, max_age=2.0):
+        if not model:
+            return False
+        return model in self.loaded_models(max_age=max_age)
+
+    def _persist_expected(self):
+        data = load_json(self.state_file) or {}
+        if not isinstance(data, dict):
+            data = {}
+        data[self.name] = {
+            "boot": self.expected.get("boot", 45),
+            "service": self.expected.get("service", 20),
+            "model": self.expected.get("model", 100),
+        }
+        atomic_write_json(self.state_file, data)
+
+    def _learn_durations(self, measured):
+        for phase in ("boot", "service", "model"):
+            if phase in measured:
+                old = float(self.expected.get(phase, 100))
+                self.expected[phase] = 0.5 * old + 0.5 * float(measured[phase])
+        self._persist_expected()
+
+    def _set_phase(self, phase, error=None, clear_error=False):
+        with self.cond:
+            changed = self.phase != phase
+            self.phase = phase
+            self.phase_since = now_wall()
+            if changed or clear_error:
+                self.error = error
+            elif error is not None:
+                self.error = error
+            if changed:
+                logging.info("%s: %s", self.name, LABELS.get(phase, phase))
+
+    def _load_model(self, model):
+        path = "/upstream/" + urllib.parse.quote(model, safe="") + "/health"
+        try:
+            req = urllib.request.Request(self._url(path), method="GET")
+            with urllib.request.urlopen(req, timeout=self.model_load_timeout_seconds):
+                pass
+        except Exception as exc:
+            logging.debug("%s: model load request failed: %s", self.name, exc)
+
+    def wake(self, model=None, reason="manual"):
+        model = self.resolve_model(model)
+        loaded = self.phase == "ready" and (not model or self.is_loaded(model))  # network call, outside the lock
+        with self.cond:
+            if self.wake_thread is not None and self.wake_thread.is_alive():
+                return
+            if self.phase == "ready" and loaded:
+                return
+            self.phase = "start"
+            self.phase_since = now_wall()
+            self.error = None
+            logging.info("%s: %s", self.name, LABELS["start"])
+
+            thread = threading.Thread(target=self._wake_worker, args=(model, reason), daemon=True)
+            self.wake_thread = thread
+
+        thread.start()
+
+    def _wake_worker(self, model, reason):
+        try:
+            self._wake_inner(model, reason)
+        except Exception as exc:
+            self._set_phase("error", str(exc), clear_error=False)
+        finally:
+            with self.cond:
+                self.wake_thread = None
+
+    def _wake_inner(self, model, reason):
+        measured = {}
+        started = False  # only a start by us gives usable phase durations
+
+        while True:
+            st = self.provider.state(self.instance_id)
+            if st in ("running", "pending"):
+                break
+            if st in ("stopping", "shutting-down"):
+                self._set_phase("stopping")
+                time.sleep(self.poll_seconds)
+                continue
+            if st == "stopped":
+                try:
+                    self.provider.start(self.instance_id)
+                    started = True
+                except CapacityError as exc:
+                    self._set_phase("start", "AWS hat gerade keine GPU frei", clear_error=False)
+                    deadline = now_mono() + self.capacity_retry_seconds
+                    while True:
+                        time.sleep(self.capacity_wait_seconds)
+                        if now_mono() >= deadline:
+                            raise RuntimeError(f"AWS hat keine GPU frei: {exc}")
+                        try:
+                            self.provider.start(self.instance_id)
+                            started = True
+                            break
+                        except CapacityError:
+                            self._set_phase("start", "AWS hat gerade keine GPU frei", clear_error=False)
+                    continue
+                continue
+            raise RuntimeError(f"EC2-Zustand {st}")
+
+        deadline = now_mono() + self.start_timeout_seconds
+
+        self._set_phase("boot")
+        phase_start = now_mono()
+        while now_mono() < deadline:
+            st = self.provider.state(self.instance_id)
+            if st == "running":
+                break
+            if st in ("stopping", "shutting-down"):
+                self._set_phase("stopping")
+            time.sleep(self.poll_seconds)
+        else:
+            raise RuntimeError("Boot (Zeitlimit)")
+        measured["boot"] = now_mono() - phase_start
+        with self.cond:
+            self.started_at = now_wall()
+
+        self._set_phase("service")
+        phase_start = now_mono()
+        while now_mono() < deadline:
+            if self._health_ok():
+                break
+            time.sleep(self.poll_seconds)
+        else:
+            raise RuntimeError("Dienst (Zeitlimit)")
+        measured["service"] = now_mono() - phase_start
+
+        if model:
+            self._set_phase("model")
+            phase_start = now_mono()
+            threading.Thread(target=self._load_model, args=(model,), daemon=True).start()
+            deadline = now_mono() + self.model_load_timeout_seconds
+            while now_mono() < deadline:
+                if model in self.loaded_models(max_age=0):
+                    break
+                time.sleep(self.poll_seconds)
+            else:
+                raise RuntimeError("Modell (Zeitlimit)")
+            measured["model"] = now_mono() - phase_start
+
+        if started:
+            self._learn_durations(measured)
+        self._set_phase("ready")
+
+    def observe(self):
+        with self.cond:
+            if self.wake_thread is not None and self.wake_thread.is_alive():
+                return
+        st = self.provider.state(self.instance_id)
+        if st == "running":
+            with self.cond:
+                if self.started_at is None:
+                    self.started_at = now_wall()
+            phase = "ready" if self._health_ok() else "service"
+        elif st == "pending":
+            phase = "boot"
+        elif st in ("stopping", "shutting-down"):
+            phase = "stopping"
+        else:
+            phase = "off"
+            with self.cond:
+                self.started_at = None
+
+        with self.cond:
+            if self.phase != phase:
+                self._set_phase(phase, clear_error=True)
+
+    def wait_ready(self, model, timeout, tick=None):
+        """Waits until a wake round for this request is over; True if the machine is ready.
+
+        One wake round per request: a model swap that llama-swap does later is its own business, and
+        requests for different models must not wake each other in circles.
+        """
+        deadline = now_mono() + timeout
+        resolved = self.resolve_model(model)
+        self.wake(resolved, "request")
+        next_tick = now_mono() + 10.0
+        while True:
+            with self.cond:
+                alive = self.wake_thread is not None and self.wake_thread.is_alive()
+                if not alive and self.phase in ("ready", "error"):
+                    return self.phase == "ready"
+                left = deadline - now_mono()
+                if left <= 0:
+                    return False
+                if alive:
+                    self.cond.wait(min(left, 0.25))  # short: the thread ends a moment after its last notify
+            if not alive:
+                self.wake(resolved, "request")  # observe() saw another state meanwhile, e.g. stopped
+                time.sleep(0.1)
+            if tick and now_mono() >= next_tick:
+                next_tick = now_mono() + 10.0
+                tick()
+
+    def maybe_stop(self):
+        with self.cond:
+            if self.wake_thread is not None and self.wake_thread.is_alive():
+                return
+            if self.inflight > 0:
+                return
+            if self.hold_until > now_wall():
+                return
+            if self.idle_minutes <= 0:
+                return
+            if self.started_at is None:
+                self.started_at = now_wall()
+            if now_wall() - self.started_at < self.min_runtime_minutes * 60:
+                return
+            if now_wall() - self.last_activity < self.idle_minutes * 60:
+                return
+
+        st = self.provider.state(self.instance_id)
+        if st != "running":
+            return
+
+        logging.info("STOP reason=idle machine=%s", self.name)
+        self.provider.stop(self.instance_id)
+        with self.cond:
+            self.started_at = None
+            self.last_activity = now_wall()
+            if not isinstance(self.provider, NoneProvider):
+                self._set_phase("stopping", clear_error=True)
+
+    def begin(self):
+        with self.cond:
+            self.inflight += 1
+            self.last_activity = now_wall()
+
+    def end(self):
+        with self.cond:
+            self.inflight = max(0, self.inflight - 1)
+            self.last_activity = now_wall()
+
+    def touch(self):
+        with self.cond:
+            self.last_activity = now_wall()
+
+    def set_hold(self, minutes):
+        with self.cond:
+            if minutes <= 0:
+                self.hold_until = 0.0
+            else:
+                self.hold_until = now_wall() + minutes * 60
+
+    def _progress(self):
+        phase = self.phase
+        if phase == "ready":
+            return 100, 0
+        if phase not in BANDS:
+            return 0, 0
+        lo, hi = BANDS[phase]
+        expected = max(1.0, float(self.expected.get(phase, 100)))
+        elapsed = max(0.0, now_wall() - self.phase_since)
+        pct = lo + (hi - lo) * min(elapsed / expected, 0.97)
+        eta = max(expected - elapsed, 2)
+        for later in LATER_PHASES.get(phase, []):
+            if later == "model" and not self.models:
+                continue
+            eta += float(self.expected.get(later, 100))
+        return int(pct), int(eta)
+
+    def snapshot(self):
+        with self.cond:
+            pct, eta = self._progress()
+            stop_in = None
+            if self.phase == "ready" and self.idle_minutes > 0:
+                stop_in = max(0, int(self.idle_minutes * 60 - (now_wall() - self.last_activity)))
+            return {
+                "machine": self.name,
+                "phase": self.phase,
+                "label": LABELS.get(self.phase, self.phase),
+                "percent": pct,
+                "eta_seconds": eta,
+                "error": self.error,
+                "ready": self.phase == "ready",
+                "default_model": self.default_model,
+                "models": list(self.models),
+                "loaded": list(self.loaded_cache),
+                "inflight": self.inflight,
+                "last_activity_age": int(now_wall() - self.last_activity),
+                "stop_in_seconds": stop_in,
+                "hold_seconds": max(0, int(self.hold_until - now_wall())),
+            }
+
+
+class KaiPfoertner:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.listen = cfg.get("listen", "127.0.0.1")
+        self.port = int(cfg.get("port", 8081))
+        self.state_file = cfg.get("state_file", "/var/lib/kai-pfoertner/state.json")
+        self.check_seconds = float(cfg.get("check_seconds", 60))
+        self.observe_seconds = float(cfg.get("observe_seconds", 5))
+        self.request_wait_seconds = float(cfg.get("request_wait_seconds", 540))
+        self.login_log_service = cfg.get("login_log_service", "open-webui")
+        self.login_regex = re.compile(cfg.get("login_regex", DEFAULT_LOGIN_REGEX))
+        self.login_window = cfg.get("login_window", "")
+        self.provider = make_provider(cfg)
+
+        self.machines = {}
+        for name, mcfg in cfg.get("machines", {}).items():
+            self.machines[name] = Machine(name, mcfg, self.provider, self.state_file)
+
+        state = load_json(self.state_file)
+        if isinstance(state, dict):
+            for name, expected in state.items():
+                if name in self.machines and isinstance(expected, dict):
+                    self.machines[name].expected.update(expected)
+
+        self.model_to_machine = {}
+        for name, machine in self.machines.items():
+            for model in machine.models:
+                self.model_to_machine.setdefault(model, name)
+
+    def status(self):
+        return {
+            "machines": {name: m.snapshot() for name, m in self.machines.items()},
+            "models": dict(self.model_to_machine),
+        }
+
+    def loop(self):
+        next_observe = now_mono()
+        next_check = now_mono()
+        while True:
+            now = now_mono()
+            if now >= next_observe:
+                for machine in self.machines.values():
+                    machine.observe()
+                next_observe = now + self.observe_seconds
+            if now >= next_check:
+                for machine in self.machines.values():
+                    machine.maybe_stop()
+                next_check = now + self.check_seconds
+            time.sleep(0.25)
+
+    def login_window_ok(self):
+        window = self.login_window
+        if not window:
+            return True
+        try:
+            a, b = window.split("-", 1)
+            a = int(a)
+            b = int(b)
+        except Exception:
+            return True
+        hour = time.localtime().tm_hour
+        if a <= b:
+            return a <= hour < b
+        return hour >= a or hour < b
+
+    def login_watcher(self):
+        while True:
+            try:
+                out = subprocess.check_output(
+                    [
+                        "docker",
+                        "ps",
+                        "-q",
+                        "--filter",
+                        f"label=com.docker.compose.service={self.login_log_service}",
+                    ],
+                    text=True,
+                ).strip()
+                if not out:
+                    logging.info("login watcher: no container for %s", self.login_log_service)
+                    time.sleep(5)
+                    continue
+                cid = out.splitlines()[0]
+                proc = subprocess.Popen(
+                    ["docker", "logs", "--follow", "--since", "1s", cid],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                for line in proc.stdout:
+                    if not self.login_regex.search(line):
+                        continue
+                    if not self.login_window_ok():
+                        continue
+                    for machine in self.machines.values():
+                        if machine.wake_on_login:
+                            machine.touch()
+                            machine.wake(None, "login")
+            except Exception as exc:
+                logging.warning("login watcher error: %s", exc)
+            time.sleep(5)
+
+    def serve(self):
+        handler = make_handler(self)
+        server = ThreadingHTTPServer((self.listen, self.port), handler)
+        server.daemon_threads = True
+
+        threading.Thread(target=self.loop, daemon=True).start()
+        if self.login_log_service:
+            threading.Thread(target=self.login_watcher, daemon=True).start()
+
+        logging.info(
+            "listening on %s:%s provider=%s machines=%s",
+            self.listen,
+            self.port,
+            self.cfg.get("provider", "none"),
+            ",".join(self.machines.keys()),
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.shutdown()
+
+
+def make_handler(app):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):
+            logging.debug("%s - %s", self.address_string(), fmt % args)
+
+        def send_json(self, status, obj):
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def read_body(self):
+            transfer = self.headers.get("Transfer-Encoding", "").lower()
+            if "chunked" in transfer:
+                chunks = []
+                total = 0
+                while True:
+                    line = self.rfile.readline(65536)
+                    if not line:
+                        break
+                    try:
+                        size = int(line.split(b";", 1)[0], 16)
+                    except ValueError:
+                        raise ValueError("bad chunk size")
+                    if size == 0:
+                        self.rfile.readline()
+                        break
+                    total += size
+                    if total > MAX_BODY_BYTES:
+                        raise ValueError("body too large")
+                    chunks.append(self.rfile.read(size))
+                    self.rfile.readline()
+                return b"".join(chunks)
+
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length > MAX_BODY_BYTES:
+                raise ValueError("body too large")
+            if length <= 0:
+                return b""
+            return self.rfile.read(length)
+
+        def parse_path(self):
+            parsed = urllib.parse.urlsplit(self.path)
+            return parsed.path, urllib.parse.parse_qs(parsed.query)
+
+        def do_GET(self):
+            self.handle_request("GET")
+
+        def do_POST(self):
+            self.handle_request("POST")
+
+        def do_PUT(self):
+            self.handle_request("PUT")
+
+        def do_DELETE(self):
+            self.handle_request("DELETE")
+
+        def handle_request(self, method):
+            try:
+                path, query = self.parse_path()
+                if path == "/health":
+                    self.send_json(200, {"ok": True})
+                    return
+                if path == "/status":
+                    model = query.get("model", [""])[0]
+                    if model:
+                        machine_name = app.model_to_machine.get(model)
+                        if not machine_name:
+                            self.send_json(404, {"error": "unknown model"})
+                            return
+                        self.send_json(200, app.machines[machine_name].snapshot())
+                        return
+                    self.send_json(200, app.status())
+                    return
+
+                parts = [p for p in path.split("/") if p]
+                if parts and parts[0] == "status":
+                    if len(parts) == 2:
+                        machine = app.machines.get(parts[1])
+                        if not machine:
+                            self.send_json(404, {"error": "unknown machine"})
+                            return
+                        self.send_json(200, machine.snapshot())
+                        return
+
+                if parts and parts[0] == "wake":
+                    if len(parts) == 2:
+                        machine = app.machines.get(parts[1])
+                        if not machine:
+                            self.send_json(404, {"error": "unknown machine"})
+                            return
+                        machine.touch()
+                        machine.wake(query.get("model", [None])[0], query.get("reason", ["manual"])[0])
+                        self.send_json(200, machine.snapshot())
+                        return
+
+                if parts and parts[0] == "hold":
+                    if len(parts) == 2:
+                        machine = app.machines.get(parts[1])
+                        if not machine:
+                            self.send_json(404, {"error": "unknown machine"})
+                            return
+                        try:
+                            minutes = int(query.get("minutes", ["0"])[0])
+                        except ValueError:
+                            minutes = 0
+                        machine.set_hold(minutes)
+                        self.send_json(200, machine.snapshot())
+                        return
+
+                if len(parts) >= 3 and parts[0] in app.machines and parts[1] == "v1":
+                    self.proxy(app.machines[parts[0]], method, "/".join(parts[2:]), query)
+                    return
+
+                self.send_json(404, {"error": "not found"})
+            except Exception as exc:
+                logging.exception("request failed")
+                try:
+                    self.send_json(500, {"error": str(exc)})
+                except Exception:
+                    pass
+
+        def proxy(self, machine, method, subpath, query):
+            try:
+                body = self.read_body()
+            except ValueError as exc:
+                self.send_json(413, {"error": str(exc)})
+                return
+
+            target = "/v1/" + subpath
+            if query:
+                target += "?" + urllib.parse.urlencode(query, doseq=True)
+
+            if method == "GET" and subpath == "models":
+                data = {
+                    "object": "list",
+                    "data": [
+                        {"id": model, "object": "model", "owned_by": "kai-pfoertner"}
+                        for model in machine.models
+                    ],
+                }
+                self.send_json(200, data)
+                return
+
+            if method in ("GET", "PUT", "DELETE"):
+                with machine.cond:
+                    ready = machine.phase == "ready"
+                if not ready:
+                    self.send_json(503, {"error": {"message": f"{machine.name} ist nicht bereit", "type": "kai_pfoertner_off"}})
+                    return
+                self.forward(machine, method, target, body, False)
+                return
+
+            if method == "POST":
+                model = None
+                stream = False
+                if body:
+                    try:
+                        data = json.loads(body.decode("utf-8", "replace"))
+                        model = data.get("model")
+                        stream = bool(data.get("stream", False))
+                    except Exception:
+                        pass
+
+                sse_open = False  # True once the event-stream headers went out while we wait for the machine
+                machine.begin()
+                try:
+                    ready = machine.phase == "ready"
+                    loaded = ready and (model not in machine.models or machine.is_loaded(model))
+                    if not (ready and loaded):
+                        if stream:
+                            sse_open = True
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream")
+                            self.send_header("Cache-Control", "no-cache")
+                            self.send_header("Connection", "close")
+                            self.end_headers()
+                            self.wfile.write(b": kai-pfoertner keep-alive\n\n")
+                            self.wfile.flush()
+
+                            def tick():
+                                try:
+                                    self.wfile.write(b": kai-pfoertner keep-alive\n\n")
+                                    self.wfile.flush()
+                                except (BrokenPipeError, ConnectionResetError):
+                                    pass
+
+                            if not machine.wait_ready(model, app.request_wait_seconds, tick=tick):
+                                with machine.cond:
+                                    err = machine.error or "Zeitlimit"
+                                obj = {
+                                    "error": {
+                                        "message": f"{machine.name} konnte nicht gestartet werden: {err}",
+                                        "type": "kai_pfoertner_unavailable",
+                                    }
+                                }
+                                self.wfile.write(b"data: " + json.dumps(obj).encode("utf-8") + b"\n\n")
+                                self.wfile.write(b"data: [DONE]\n\n")
+                                self.wfile.flush()
+                                return
+                        else:
+                            if not machine.wait_ready(model, app.request_wait_seconds):
+                                with machine.cond:
+                                    err = machine.error or "Zeitlimit"
+                                self.send_json(
+                                    503,
+                                    {
+                                        "error": {
+                                            "message": f"{machine.name} konnte nicht gestartet werden: {err}",
+                                            "type": "kai_pfoertner_unavailable",
+                                        }
+                                    },
+                                )
+                                return
+
+                    self.forward(machine, method, target, body, sse_open)
+                finally:
+                    machine.end()
+                return
+
+            self.send_json(404, {"error": "not found"})
+
+        def forward(self, machine, method, target, body, sse_sent):
+            split = urllib.parse.urlsplit(machine.endpoint)
+            host = split.hostname
+            port = split.port or (443 if split.scheme == "https" else 80)
+            base_path = split.path.rstrip("/")
+            if base_path:
+                target = base_path + target
+
+            headers = {}
+            for key, value in self.headers.items():
+                lk = key.lower()
+                if lk in HOP_BY_HOP or lk.startswith("proxy-"):
+                    continue
+                headers[key] = value
+
+            headers["Host"] = split.netloc
+            if body:
+                headers["Content-Length"] = str(len(body))
+            elif method in ("POST", "PUT", "DELETE"):
+                headers["Content-Length"] = "0"
+
+            try:
+                conn = http.client.HTTPConnection(host, port, timeout=900)
+                conn.request(method, target, body=body, headers=headers)
+                resp = conn.getresponse()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError as exc:
+                logging.warning("upstream error: %s", exc)
+                machine.invalidate_loaded_cache()
+                if not sse_sent:
+                    self.send_json(
+                        502,
+                        {"error": {"message": str(exc), "type": "kai_pfoertner_upstream"}},
+                    )
+                return
+
+            try:
+                if not sse_sent:
+                    self.send_response(resp.status)
+                    for key, value in resp.getheaders():
+                        lk = key.lower()
+                        # send_response() adds Server and Date itself; strict clients (aiohttp) reject duplicates
+                        if (lk in HOP_BY_HOP and lk != "content-length") or lk in ("server", "date"):
+                            continue
+                        self.send_header(key, value)
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                elif resp.status != 200:
+                    obj = {"error": {"message": f"upstream status {resp.status}", "type": "kai_pfoertner_upstream"}}
+                    self.wfile.write(b"data: " + json.dumps(obj).encode("utf-8") + b"\n\n")
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    return
+
+                while True:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except OSError as exc:
+                logging.warning("upstream stream error: %s", exc)
+                machine.invalidate_loaded_cache()
+                if not sse_sent:
+                    try:
+                        self.send_json(
+                            502,
+                            {"error": {"message": str(exc), "type": "kai_pfoertner_upstream"}},
+                        )
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    return Handler
+
+
+def request_json(method, url):
+    req = urllib.request.Request(url, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        try:
+            return json.loads(exc.read().decode("utf-8", "replace"))
+        except Exception:
+            return {"error": str(exc)}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def cli_request(app_cfg, command, machine=None, model=None, minutes=None):
+    listen = app_cfg.get("listen", "127.0.0.1")
+    port = int(app_cfg.get("port", 8081))
+    base = f"http://{listen}:{port}"
+    if command == "status":
+        return request_json("GET", base + "/status")
+    if command == "wake":
+        url = base + "/wake/" + urllib.parse.quote(machine, safe="")
+        if model:
+            url += "?model=" + urllib.parse.quote(model, safe="")
+        return request_json("POST", url)
+    if command == "hold":
+        url = base + "/hold/" + urllib.parse.quote(machine, safe="") + "?minutes=" + str(minutes)
+        return request_json("POST", url)
+    return {"error": "unknown command"}
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="kai-pfoertner")
+    parser.add_argument("--config", default=os.environ.get("KAI_PFOERTNER_CONFIG", DEFAULT_CONFIG_PATH))
+    parser.add_argument("command", nargs="?", default="serve", choices=["serve", "status", "wake", "hold"])
+    parser.add_argument("machine", nargs="?")
+    parser.add_argument("model_or_minutes", nargs="?")
+    args = parser.parse_args()
+
+    cfg = load_json(args.config)
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    logging.basicConfig(
+        level=getattr(logging, str(cfg.get("log_level", "INFO")).upper(), logging.INFO),
+        stream=sys.stdout,
+        format="%(message)s",
+    )
+
+    if args.command == "serve":
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        KaiPfoertner(cfg).serve()
+        return
+
+    if args.command in ("wake", "hold") and not args.machine:
+        parser.error(f"{args.command} requires MACHINE")
+    if args.command == "hold":
+        if args.model_or_minutes is None:
+            parser.error("hold requires MINUTES")
+        try:
+            minutes = int(args.model_or_minutes)
+        except ValueError:
+            parser.error("MINUTES must be an integer")
+    else:
+        minutes = None
+
+    result = cli_request(cfg, args.command, args.machine, args.model_or_minutes if args.command == "wake" else None, minutes)
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

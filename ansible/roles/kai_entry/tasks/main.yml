@@ -33,6 +33,15 @@
     group: root
     mode: "0644"
 
+# Der Filter "Kai-Status" fuer Open WebUI; kai-bootstrap spielt ihn in Open WebUI ein.
+- name: Filter Kai-Status kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_entry_src_dir }}/../../openwebui/kai_status_filter.py"
+    dest: "{{ kai_entry_install_dir }}/kai_status_filter.py"
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: LiteLLM-Konfiguration aus Vorlage erzeugen
   ansible.builtin.template:
     src: "{{ kai_entry_src_dir }}/litellm.yaml.j2"

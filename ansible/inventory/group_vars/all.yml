@@ -15,7 +15,7 @@ ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new"
 kai_http_proxy: ""
 kai_no_proxy: "localhost,127.0.0.1,.unserkai.de"
 # Zusaetzlich fuer Container: die Dienstnamen im Compose-Netz.
-kai_container_no_proxy: "litellm,litellm-db,brave-mcp,open-webui,llama-swap"
+kai_container_no_proxy: "kai-pfoertner,litellm,litellm-db,brave-mcp,open-webui,llama-swap"
 
 # Zugang zu den Kai-Instanzen ueber SSM: Host = Instanz-ID in ~/.ssh/config, nichts davon im Repo.
 

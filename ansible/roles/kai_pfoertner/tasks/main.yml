@@ -1,0 +1,96 @@
+---
+# Rollt den Pfoertner aus (kai/docs/05_vorschlag-auto-stop.md); ohne kai_pfoertner_enabled wird er gestoppt,
+# damit er keine Maschine stoppt, auf die LiteLLM wieder direkt zeigt.
+- name: Pfoertner abschalten, wenn nicht gewuenscht
+  ansible.builtin.systemd:
+    name: kai-pfoertner
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not kai_pfoertner_enabled | bool
+
+- name: Pfoertner ausrollen
+  when: kai_pfoertner_enabled | bool
+  block:
+    - name: Boto3 installieren (nur fuer den Provider aws)
+      ansible.builtin.apt:
+        name: python3-boto3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: kai_pfoertner_provider == 'aws'
+
+    # Die Adresse des Docker-Netzes bridge: dort lauscht der Pfoertner, Container erreichen ihn ueber host-gateway.
+    - name: Adresse der Docker-Bridge lesen
+      ansible.builtin.command:
+        cmd: docker network inspect bridge
+      register: kai_pfoertner_bridge
+      changed_when: false
+      check_mode: false
+
+    - name: Lauschadresse festhalten
+      ansible.builtin.set_fact:
+        kai_pfoertner_listen: "{{ (kai_pfoertner_bridge.stdout | from_json)[0].IPAM.Config[0].Gateway }}"
+
+    # LiteLLM bindet /etc/hosts der Maschine ein und findet den Pfoertner so unter seinem Namen.
+    - name: Name kai-pfoertner in /etc/hosts eintragen
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} kai-pfoertner"
+        block: "{{ kai_pfoertner_listen }} kai-pfoertner"
+
+    - name: Verzeichnis der Konfiguration anlegen
+      ansible.builtin.file:
+        path: "{{ kai_pfoertner_config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Programm kopieren
+      ansible.builtin.copy:
+        src: "{{ kai_pfoertner_src }}"
+        dest: "{{ kai_pfoertner_bin }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Pfoertner neu starten
+
+    - name: Konfiguration erzeugen
+      ansible.builtin.template:
+        src: config.json.j2
+        dest: "{{ kai_pfoertner_config_dir }}/config.json"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Pfoertner neu starten
+
+    - name: Systemd-Dienst erzeugen
+      ansible.builtin.template:
+        src: kai-pfoertner.service.j2
+        dest: /etc/systemd/system/kai-pfoertner.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Pfoertner neu starten
+
+    - name: Aenderungen anwenden, bevor LiteLLM auf den Pfoertner zeigt
+      ansible.builtin.meta: flush_handlers
+
+    - name: Dienst aktivieren und starten
+      ansible.builtin.systemd:
+        name: kai-pfoertner
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Antwort des Pfoertners pruefen
+      ansible.builtin.uri:
+        url: "http://{{ kai_pfoertner_listen }}:{{ kai_pfoertner_port }}/health"
+        return_content: false
+      register: kai_pfoertner_health
+      retries: 5
+      delay: 2
+      until: kai_pfoertner_health.status == 200
+      changed_when: false
+      when: not ansible_check_mode

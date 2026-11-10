@@ -85,7 +85,7 @@ Voraussetzung: Punkte aus [02 §8](02_anforderungen-infrastruktur.md) erfüllt, 
 - **Maschinenwechsel:** nie auf einer Maschine von Hand reparieren, was die Rolle nicht auch auf einer frischen Maschine herstellt; jede Abweichung geht zurück in die Rolle. Das hält die Regel aus [01 §3](01_architektur.md) ein.
 - **Später auf `kai-entry`:** dieselben Checks laufen dort aus denselben Debian-Paketen wie in `kai-dev`; dessen Werkzeugliste ist die Vorlage dafür.
 - **Sprache:** Repo-Konvention Deutsch für Kai-Dokumente, Kommentare und Aufgaben-Namen; Variablennamen, Logausgaben und Dateinamen Englisch.
-- **Geheimnisse:** nie im Git. `.env` nur auf `kai-entry`; Brave-Key, `WEBUI_SECRET_KEY` und LiteLLM-Master-Key zusätzlich in der Team-KeePass (`unserkai.kdbx`).
+- **Geheimnisse:** nie im Git. `.env` nur auf `kai-entry`; Brave-Key, `WEBUI_SECRET_KEY` und LiteLLM-Master-Key zusätzlich in der Team-KeePass (`unserkai.kdbx`), das Admin-Passwort von Open WebUI nur dort (`kai-bootstrap` zeigt es einmalig und speichert nichts).
 
 ## Offene Punkte (Entscheidung Uwe / Team)
 
@@ -97,5 +97,5 @@ Voraussetzung: Punkte aus [02 §8](02_anforderungen-infrastruktur.md) erfüllt, 
 6. `kai-gpu` (`kai1`): Root von 30 auf 50 GB; 30 GB liefen beim Wechsel des CUDA-Images voll ([02 §1.7](02_anforderungen-infrastruktur.md))
 7. Budget-Grenze für Betriebsstunden von `kai-gpu` und den Dauerbetrieb von `kai-entry` (S1-03)
 8. Datenschutz-Regeln für den Prototyp festhalten (S1-04): wer ist Admin in Open WebUI, Aufbewahrung von Chats, ob und wann externe Modelle über LiteLLM freigegeben werden
-9. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung) und `/opt/kai/accounts.txt`, das die Startpasswörter heute unverschlüsselt (0600, nur root) hält; für den Start so akzeptiert
+9. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung); für den Start so akzeptiert. Das frühere `/opt/kai/accounts.txt` mit Klartext-Startpasswörtern schreibt `kai-bootstrap` nicht mehr; auf `webui1` ist die Altdatei nach Übertrag in die KeePass zu löschen (`shred -u`)
 10. Auto-Stop von `kai1` nach Leerlauf und nächtlicher Stopp: Vorschlag in [05](05_vorschlag-auto-stop.md)

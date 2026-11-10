@@ -13,6 +13,24 @@ kai_litellm_port: 4000
 # Datenvolume: per Label eingebunden, nie per Geraetename (Architektur E4).
 kai_volume_label: kai-data
 kai_volume_mountpoint: /opt/kai
-# Sekunden, die LiteLLM auf kai-gpu wartet (Verbindungsaufbau und je Antwortstueck). Muss das Laden
-# eines Modells von EBS abdecken (bis ~120 s); bei gestoppter kai-gpu kommt der Fehler nach dieser Zeit.
-kai_litellm_request_timeout: 180
+# Sekunden, die LiteLLM auf kai-gpu wartet (Verbindungsaufbau und je Antwortstueck). Muss den Kaltstart
+# abdecken, den der Pfoertner festhaelt (Start + Modell laden, etwa 3 min, Reserve bis 6 min).
+kai_litellm_request_timeout: 600
+
+# Pfoertner (kai/docs/05_vorschlag-auto-stop.md): startet kai-gpu bei Bedarf und stoppt sie nach Leerlauf.
+# false = LiteLLM spricht kai-gpu direkt an, der Pfoertner wird gestoppt (Rueckfall).
+kai_pfoertner_enabled: true
+# Port des Pfoertners auf der Docker-Bridge (nie nach aussen).
+kai_pfoertner_port: 8081
+# Logischer Name der GPU-Maschine im Pfad /<name>/v1 und in den Journal-Eintraegen.
+kai_pfoertner_machine: kai1
+# aws: echte Instanz starten und stoppen; none: Trockenlauf (nur Logzeilen, die Maschine gilt als an).
+kai_pfoertner_provider: aws
+kai_pfoertner_region: eu-central-1
+kai_pfoertner_instance_id: "{{ hostvars[kai_gpu_peer].ansible_host if kai_pfoertner_provider == 'aws' else '' }}"
+# Stopp nach so vielen Minuten ohne Anfrage (0 = nie) und frueheste Stoppzeit nach dem Start.
+kai_pfoertner_idle_minutes: 30
+kai_pfoertner_min_runtime_minutes: 10
+# Frueher Start, sobald sich jemand in Open WebUI anmeldet (nur im Zeitfenster, z. B. "7-23"; leer = immer).
+kai_pfoertner_wake_on_login: true
+kai_pfoertner_login_window: ""

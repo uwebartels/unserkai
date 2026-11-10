@@ -1,0 +1,9 @@
+---
+# Programm im Repo und sein Ziel auf der Maschine.
+kai_pfoertner_src: "{{ playbook_dir }}/../../kai/bin/kai-pfoertner"
+kai_pfoertner_bin: /usr/local/bin/kai-pfoertner
+kai_pfoertner_config_dir: /etc/kai-pfoertner
+# Dienst im Compose-Stack, in dessen Log der Fruehstart die Anmeldungen liest.
+kai_pfoertner_login_log_service: open-webui
+# Die Betriebswerte (Port, Maschine, Provider, Leerlaufzeit, ...) stehen in group_vars/kai_entry.yml,
+# weil auch die LiteLLM-Vorlage der Rolle kai_entry sie braucht.

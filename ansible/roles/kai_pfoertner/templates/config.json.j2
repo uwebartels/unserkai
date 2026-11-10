@@ -1,0 +1,19 @@
+{{ {
+  'listen': kai_pfoertner_listen,
+  'port': kai_pfoertner_port,
+  'provider': kai_pfoertner_provider,
+  'region': kai_pfoertner_region,
+  'state_file': '/var/lib/kai-pfoertner/state.json',
+  'login_log_service': kai_pfoertner_login_log_service if kai_pfoertner_wake_on_login | bool else '',
+  'login_window': kai_pfoertner_login_window,
+  'machines': {
+    kai_pfoertner_machine: {
+      'instance_id': kai_pfoertner_instance_id,
+      'endpoint': kai_gpu_endpoint,
+      'models': hostvars[kai_gpu_peer].kai_gpu_models | map(attribute='name') | list,
+      'idle_minutes': kai_pfoertner_idle_minutes,
+      'min_runtime_minutes': kai_pfoertner_min_runtime_minutes,
+      'wake_on_login': kai_pfoertner_wake_on_login | bool,
+    }
+  }
+} | to_nice_json }}

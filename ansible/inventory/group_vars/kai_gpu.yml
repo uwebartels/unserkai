@@ -20,6 +20,7 @@ docker_daemon_config: >-
      | combine({'runtimes': {'nvidia': {'path': 'nvidia-container-runtime', 'runtimeArgs': []}}}
                if kai_gpu_enabled | bool else {}) }}
 
-# Modelle, die llama-swap beim Start laedt (hooks.on_startup.preload), damit der erste Chat nicht
-# auf das Laden von der EBS-Platte wartet (Kaltstart 98 s am 2026-11-08); [] schaltet es ab.
-kai_gpu_preload: "{{ kai_gpu_models[:1] | map(attribute='name') | list }}"
+# Modelle, die llama-swap beim Start laedt (hooks.on_startup.preload); [] schaltet es ab. Leer, weil der
+# Pfoertner (webui1) das angeforderte Modell laden laesst; ein starres Preload kostet sonst ein zweites Laden
+# (kai/docs/05_vorschlag-auto-stop.md 4.4). Ohne Pfoertner: kai_gpu_models[:1] | map(attribute='name') | list.
+kai_gpu_preload: []

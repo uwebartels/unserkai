@@ -8,14 +8,18 @@ registers the Brave MCP tool server, and disables public signup.
 
 Idempotent: running it twice changes nothing the second time.
 
+Passwords are never written to disk. Generated start passwords are printed
+once at the end; store them in the team KeePass and hand them out. On later
+runs the admin password comes from KAI_ADMIN_PASSWORD or an interactive prompt.
+
 Options:
   --env-file PATH          Path to .env file (default: /opt/kai/.env)
   --compose-dir PATH       Path to compose directory (default: /opt/kai)
   --litellm-url URL        LiteLLM base URL (default: http://127.0.0.1:4000)
   --litellm-internal-url URL  LiteLLM URL inside the Docker network (default: http://litellm:4000/v1)
   --webui-url URL          Open WebUI base URL (default: http://127.0.0.1:3000)
-  --secrets-file PATH      Path to secrets file (default: /opt/kai/accounts.txt, mode 0600)
   --admin-email EMAIL      Admin email (default: env KAI_ADMIN_EMAIL, required for account steps)
+  KAI_ADMIN_PASSWORD       Env var with the admin password for runs after the first one
   --users-file PATH        Text file with lines "Name,email" (optional)
   --brave-url URL          Brave MCP URL (default: http://brave-mcp:8000/mcp)
   --dry-run                Print what would happen, change nothing
@@ -28,12 +32,14 @@ Steps:
   3. openai-connection: Set Open WebUI's LiteLLM connection and key
   4. users: Create user accounts from users-file
   5. brave-tool: Register Brave MCP tool server
-  6. signup-off: Disable public signup
+  6. status-filter: Install the global filter Kai-Status (start progress of kai-gpu)
+  7. signup-off: Disable public signup
 
 Exit codes: 0=ok, 1=step failed, 2=usage error
 """
 
 import argparse
+import getpass
 import json
 import os
 import secrets
@@ -57,9 +63,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--litellm-internal-url', default='http://litellm:4000/v1',
                         help='LiteLLM URL as seen from the Open WebUI container')
     parser.add_argument('--webui-url', default='http://127.0.0.1:3000', help='Open WebUI base URL')
-    parser.add_argument('--secrets-file', default='/opt/kai/accounts.txt', help='Path to secrets file')
     parser.add_argument('--admin-email', default=os.environ.get('KAI_ADMIN_EMAIL'), help='Admin email')
     parser.add_argument('--users-file', default=None, help='Text file with lines "Name,email"')
+    parser.add_argument('--filter-file', default='/opt/kai/kai_status_filter.py',
+                        help='Open WebUI filter "Kai-Status" (shows the start progress of kai-gpu)')
     parser.add_argument('--brave-url', default='http://brave-mcp:8000/mcp', help='Brave MCP URL')
     parser.add_argument('--dry-run', action='store_true', help='Print what would happen, change nothing')
     parser.add_argument('--apply-compose', action='store_true', help='Run docker compose after .env changes')
@@ -186,30 +193,16 @@ def update_env_file_in_place(path: str, key: str, value: str) -> bool:
     return changed
 
 
-def append_to_secrets_file(path: str, email: str, password: str) -> None:
-    """Append email password line to secrets file with mode 0600."""
-    # Ensure file exists with correct mode
-    try:
-        os.stat(path)
-    except FileNotFoundError:
-        # Create with mode 0600
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
-        os.close(fd)
-    
-    with open(path, 'a') as f:
-        f.write(f'{email} {password}\n')
+LEGACY_SECRETS_FILE = '/opt/kai/accounts.txt'
 
 
-def lookup_secret(path: str, email: str) -> Optional[str]:
-    """Return the password stored for an email in the secrets file, if any."""
-    try:
-        with open(path, 'r') as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) == 2 and parts[0] == email:
-                    return parts[1]
-    except OSError:
-        pass
+def admin_password_from_operator(email: str) -> Optional[str]:
+    """Return the admin password from KAI_ADMIN_PASSWORD or an interactive prompt."""
+    password = os.environ.get('KAI_ADMIN_PASSWORD')
+    if password:
+        return password
+    if sys.stdin.isatty():
+        return getpass.getpass(f'Open WebUI password for {email}: ') or None
     return None
 
 
@@ -307,15 +300,13 @@ def step_admin(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, s
             return (False, 'failed to create admin account')
         
         state['admin_token'] = resp['token']
-        append_to_secrets_file(args.secrets_file, args.admin_email, password)
+        state['new_accounts'].append((args.admin_email, password))
         return (True, 'created admin account')
     else:
         # Need to sign in
-        admin_password = os.environ.get('KAI_ADMIN_PASSWORD') or lookup_secret(
-            args.secrets_file, args.admin_email
-        )
+        admin_password = admin_password_from_operator(args.admin_email)
         if not admin_password:
-            return (False, 'no admin password: set KAI_ADMIN_PASSWORD or keep the secrets file')
+            return (False, 'no admin password: set KAI_ADMIN_PASSWORD or run on a terminal')
         
         status, resp = http_request(
             f'{args.webui_url}/api/v1/auths/signin',
@@ -445,7 +436,7 @@ def step_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, s
         )
         
         if status == 200:
-            append_to_secrets_file(args.secrets_file, email, password)
+            state['new_accounts'].append((email, password))
             created += 1
     
     return (True, f'created {created} users')
@@ -559,13 +550,48 @@ def step_signup_off(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bo
     return (True, detail)
 
 
+def step_status_filter(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 5: install the global filter "Kai-Status" (kai/openwebui/kai_status_filter.py) in Open WebUI."""
+    if 'status-filter' in args.skip:
+        return (True, 'skipped by user')
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+    if not os.path.exists(args.filter_file):
+        return (False, f'filter file {args.filter_file} not found')
+    if args.dry_run:
+        print('[DRY] status-filter: would install or update the filter')
+        return (True, 'dry run')
+    token = state['admin_token']
+    base = f'{args.webui_url}/api/v1/functions'
+    code = Path(args.filter_file).read_text(encoding='utf-8')
+    body = {'id': 'kai_status', 'name': 'Kai-Status',
+            'meta': {'description': 'Starts kai-gpu on demand and shows the start progress'}, 'content': code}
+    status, current = http_request(f'{base}/id/kai_status', bearer_token=token)
+    if status == 200 and isinstance(current, dict):
+        changed = current.get('content') != code
+        if changed:
+            status, _ = http_request(f'{base}/id/kai_status/update', method='POST', data=body, bearer_token=token)
+    else:
+        current, changed = {}, True
+        status, _ = http_request(f'{base}/create', method='POST', data=body, bearer_token=token)
+    if status != 200:
+        return (False, 'failed to install the filter')
+    for flag, path in (('is_active', 'toggle'), ('is_global', 'toggle/global')):
+        status, now = http_request(f'{base}/id/kai_status', bearer_token=token)
+        if status == 200 and isinstance(now, dict) and not now.get(flag):
+            http_request(f'{base}/id/kai_status/{path}', method='POST', bearer_token=token)
+            changed = True
+    return (True, 'filter installed or updated' if changed else 'filter already current')
+
+
 def main() -> None:
     """Main entry point."""
     args = parse_args()
     
     state: Dict[str, Any] = {
         'env_changed': False,
-        'admin_token': None
+        'admin_token': None,
+        'new_accounts': [],
     }
     
     steps = [
@@ -574,6 +600,7 @@ def main() -> None:
         ('openai-connection', step_openai_connection),
         ('users', step_users),
         ('brave-tool', step_brave_tool),
+        ('status-filter', step_status_filter),
         ('signup-off', step_signup_off),
     ]
     
@@ -615,6 +642,18 @@ def main() -> None:
         else:
             print(f'hint: run docker compose up -d in {args.compose_dir} to apply .env changes')
     
+    if state['new_accounts']:
+        print()
+        print('New accounts, shown once and not stored anywhere: '
+              'put them in the team KeePass now and hand them out.')
+        for email, password in state['new_accounts']:
+            print(f'  {email}  {password}')
+        print()
+
+    if os.path.exists(LEGACY_SECRETS_FILE):
+        print(f'warning: {LEGACY_SECRETS_FILE} still holds plaintext passwords; '
+              'move them to the team KeePass, then: shred -u ' + LEGACY_SECRETS_FILE)
+
     if any_failed:
         sys.exit(1)
     else:
