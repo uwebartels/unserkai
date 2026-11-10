@@ -1,0 +1,9 @@
+# Allowed hits of the private-address scan in ./check, one extended regex per line,
+# matched against "path:line:content". Keep this list short and specific.
+# Comment and empty lines are ignored.
+
+# VPC CIDR of the AWS network (Uwe's Terraform)
+^aws/common\.hcl:[0-9]+: *server_vpc_cidr *= *"10\.0\.0\.0/16"$
+
+# Security-group rules: sources inside the VPC or the private 10/8 range
+^aws/(kai1|webui1|modules/ec2instance)/firewall_rules\.csv:[0-9]+:[a-z-]+,(ingress|egress),[A-Za-z0-9-]+,-?[0-9]+,-?[0-9]+,10\.0\.0\.0/(8|16)$

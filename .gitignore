@@ -62,3 +62,12 @@ kai/compose/*/.env
 
 # Kai: private test VM inventory overlay (addresses, proxy), never committed
 ansible/inventory/local/
+
+# Never in the repository: key stores, VPN profiles, local secrets (CONTRIBUTING.md)
+*.kdbx
+*.ovpn
+*.ovpn.*
+*.gnupg.tgz
+.env
+.env.*
+!.env.example

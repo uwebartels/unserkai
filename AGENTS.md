@@ -10,7 +10,8 @@ Gemeinsames Infrastruktur-Repo von Uwe, Axel, Nic und Martin: AWS-Grundlage mit 
 
 - `make -C ansible syntax` — Syntaxcheck ohne Verbindung; `make -C ansible lint` — ansible-lint mit Profil `basic` aus `ansible/.ansible-lint`.
 - `make -C ansible ping|check|deploy [TAGS=a,b] [LIMIT=host]` — Verbindungstest, Dry-Run mit Diff, Anwenden.
-- `./check [--only <Schritt>] [Dateien]` ist das eine Prüf-Gate (Dateien, wie sie der Hook `it-check` übergibt, starten das ganze Gate) (ansible-lint, Apt-Cache nach neuer Paketquelle `ansible/lint/apt_cache.py`, yamllint, shellcheck, Python-Syntax, `docker compose config`, Vorlagen rendern, gitleaks, Scan auf private Adressen) und läuft vor jedem Commit über `.githooks/pre-commit`; Ausnahmen für den Adress-Scan stünden in `.check-allow-private-addresses` (heute keine).
+- `./check [--only <Schritt>] [Dateien]` ist das eine Prüf-Gate (Dateien, wie sie der Hook `it-check` übergibt, starten das ganze Gate) (ansible-lint, Apt-Cache nach neuer Paketquelle `ansible/lint/apt_cache.py`, yamllint, shellcheck, Python-Syntax, `docker compose config`, Vorlagen rendern, gitleaks, Scan auf private Adressen) und läuft vor jedem Commit über `.githooks/pre-commit` (`git config core.hooksPath .githooks` je Klon); Ausnahmen für den Adress-Scan stehen in `.check-allow-private-addresses` (heute nur VPC-CIDR und Firewall-Regeln unter `aws/`).
+- `.githooks/pre-push` scannt die zu übertragenden Commits mit gitleaks und weist Pushes nach `main` ab (`ALLOW_PUSH_MAIN=1` nur bewusst); `.github/workflows/check.yml` lässt `./check` und gitleaks über die ganze Historie bei jedem Push und Pull Request laufen; der Ablauf für Menschen steht in `CONTRIBUTING.md`.
 - In kai-dev bricht Ansible ohne `LC_ALL=C.UTF-8` mit „unsupported locale setting“ ab; `./check` setzt es selbst, für `make -C ansible` setzt du es von Hand.
 
 ## Bereiche
