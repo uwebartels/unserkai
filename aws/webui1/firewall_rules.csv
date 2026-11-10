@@ -1,5 +1,5 @@
 name,type,protocol,from_port,to_port,cidr_blocks
-ingress-ping,ingress,icmp,-1,-1,0.0.0.0/0
 ingress-ssh,ingress,TCP,22,22,10.0.0.0/8
 ingress-https,ingress,TCP,443,443,10.0.0.0/8
+ingress-webui,ingress,TCP,3000,3000,0.0.0.0/0
 egress-any,egress,-1,0,0,0.0.0.0/0

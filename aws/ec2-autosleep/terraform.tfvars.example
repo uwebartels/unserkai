@@ -1,0 +1,9 @@
+aws_region = "eu-central-1"
+
+# Exactly one EC2 instance must have this tag.
+instance_tag_key   = "AutoSleep"
+instance_tag_value = "true"
+idle_minutes = 30
+flow_log_retention_days = 7
+alarm_name = "EC2-TCP8080-AutoSleep"
+name_prefix = "ec2-autosleep"

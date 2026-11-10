@@ -1,0 +1,48 @@
+# Find the EC2 instance by tag. Exactly one non-terminated instance
+# must match this selector.
+data "aws_instance" "target" {
+  instance_tags   = var.instance_tag_filter
+
+  filter {
+    name = "instance-state-name"
+    values = [
+      "pending",
+      "running",
+      "stopping",
+      "stopped"
+    ]
+  }
+}
+
+locals {
+  # one() fails if multiple instances match; a missing match results in
+  # a null ID and Terraform will report an invalid instance lookup below.
+  target_instance_id = data.aws_instance.target.id
+
+
+  instance_arn = "arn:aws:ec2:${var.aws_region}:${var.aws_account_id}:instance/${local.target_instance_id}"
+
+  # Plain-text fields: srcport dstport protocol action log-status
+  # Terraform's $${...} escape emits the literal ${...} expected by AWS.
+  flow_log_format = "$${srcport} $${dstport} $${protocol} $${action} $${log-status}"
+}
+
+# # Find the primary ENI by the EC2 instance's private IP address.
+# # The attachment filters ensure that this is device index 0 on the
+# # selected instance, rather than another ENI with an unrelated address.
+data "aws_network_interface" "primary" {
+  filter {
+    name   = "addresses.private-ip-address"
+    values = [data.aws_instance.target.private_ip]
+  }
+
+  filter {
+    name   = "attachment.instance-id"
+    values = [local.target_instance_id]
+  }
+
+  filter {
+    name   = "attachment.device-index"
+    values = ["0"]
+  }
+}

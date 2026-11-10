@@ -13,7 +13,12 @@ module "ec2" {
   #ami_name_pattern = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-20260503"
   instance_type                = "t3.medium"
 
+  firewall_rules = local.rules
+  ec2_role_policy_attachments  = [
+    aws_iam_policy.ec2_start_stop.arn
+  ]
   route53_public_hostedzone_id = var.route53_public_hostedzone_id
+
 
   user_data = <<-USERDATA
     #!/bin/bash

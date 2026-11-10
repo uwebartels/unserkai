@@ -43,6 +43,10 @@ module "ec2" {
     Name         = local.name
     dlm_snapshot = "true"
   }
+
+  ec2_tags = {
+    AutoSleep = true
+  }
 }
 
 

@@ -17,3 +17,7 @@ variable "route53_public_hostedzone_id" {
   type        = string
   description = "Route 53 Hosted Zone ID"
 }
+
+variable "kai1_aws_instance_id" {}
+variable "aws_region" {}
+variable "aws_account_id" {}

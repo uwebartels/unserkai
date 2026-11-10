@@ -1,10 +1,5 @@
 variable "publicdomain" { type = string }             # from ..*/common.hcl
 
-module "domain" {
-  source = "../modules/dnsdomain"
-  domain       = var.publicdomain
-}
-
 resource "aws_route53domains_domain" "this" {
   domain_name = var.publicdomain
   auto_renew  = true
@@ -54,5 +49,5 @@ resource "aws_route53domains_domain" "this" {
 }
 
 output "domain" {
-  value = module.domain
+  value = aws_route53domains_domain.this
 }

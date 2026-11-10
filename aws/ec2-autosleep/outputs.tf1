@@ -1,0 +1,34 @@
+output "monitored_instance_id" {
+  description = "EC2 instance monitored by AutoSleep"
+  value       = local.target_instance_id
+}
+
+output "monitored_network_interface_id" {
+  description = "Primary network interface monitored by VPC Flow Logs"
+  value       = data.aws_network_interface.primary.id
+}
+
+output "flow_log_id" {
+  description = "VPC Flow Log ID"
+  value       = aws_flow_log.instance.id
+}
+
+output "flow_log_group_name" {
+  description = "CloudWatch Logs group receiving VPC Flow Logs"
+  value       = aws_cloudwatch_log_group.flow_logs.name
+}
+
+output "cloudwatch_alarm_name" {
+  description = "CloudWatch alarm that triggers EC2 stop"
+  value       = aws_cloudwatch_metric_alarm.tcp_8080_idle.alarm_name
+}
+
+output "stop_lambda_name" {
+  description = "Lambda function that stops the EC2 instance"
+  value       = aws_lambda_function.stop_instance.function_name
+}
+
+output "reset_alarm_lambda_name" {
+  description = "Lambda function that resets the alarm after EC2 starts"
+  value       = aws_lambda_function.reset_alarm.function_name
+}
