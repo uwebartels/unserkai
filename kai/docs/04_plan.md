@@ -5,8 +5,8 @@ Stand: 2026-11-10 · Bezug: Sprint 01 in ClickUp (S1-xx), [01 Architektur](01_ar
 ## Stand
 
 - Phase 1 und 2 sind abgeschlossen, und Kai 1.0 läuft seit 07.11. auf `webui1` und `kai1` (PR #14 im Fork, Protokoll dort).
-- Auf `main` steht ein Stand, der auf `webui1` und `kai1` noch nicht ausgerollt ist: die Lehren aus dem Deployment (7720180, auf den Test-VMs geprüft), siehe 3.12.
-- Offen in Phase 3 sind 3.6–3.8 und 3.11, dazu 3.12 und 3.13; die Ergebnisse von 3.5 sind unvollständig belegt.
+- `webui1` und `kai1` tragen seit 10.11. den Stand von `main` samt Pförtner (3.12, 3.13, Phase 4).
+- Offen in Phase 3 sind 3.6–3.8 und 3.11, die Ergebnisse von 3.5 sind unvollständig belegt.
 - Danach folgt Phase 4, der Pförtner.
 
 ## Phase 1 — Design, Architektur, Plan (abgeschlossen)
@@ -82,12 +82,12 @@ Voraussetzung: Punkte aus [02 §8](02_anforderungen-infrastruktur.md) erfüllt, 
 | 3.8 | Übergabe an Uwe: Zugangsweg für Nutzer freischalten, vier Personen testen PC + Telefon (S1-09), vier parallele Anfragen messen (S1-10) | Messwerte in ClickUp | Zugangsweg erledigt: Client VPN in Betrieb (`aws/vpn/`, TCP, SAML); Tests durch vier Personen und Messung offen |
 | 3.10 | Installationsprotokoll + Abweichungen zurück in die Rollen (S1-15), PR | gemergt | erledigt (7720180, PR #14) |
 | 3.11 | **Wechsel-Probe (Kann):** `kai-gpu` einmal durch eine neue Instanz aus demselben Image ersetzen, Volume `kai-models` umhängen, DNS nachziehen, `make deploy LIMIT=kai1` | Dauer gemessen gegen die Tabelle in [01 §3](01_architektur.md); Abweichungen in die Rollen | offen |
-| 3.12 | **Stand von `main` ausrollen:** `make check`, dann `make deploy LIMIT=webui1` und `make deploy LIMIT=kai1`; neue Stücke: Platzprüfung und Aufräumen der Images, Modell vorladen, `kai_extra_hosts` | zweiter Lauf `changed=0`; `kai-smoke --target entry` und `--target gpu` grün | offen; Root von `kai1` steht in Terraform weiter auf 30 GB (offener Punkt 3) |
-| 3.13 | **`kai-bootstrap` ohne Passwortdatei:** Startpasswörter einmal anzeigen, beim zweiten Lauf `KAI_ADMIN_PASSWORD` oder eine Abfrage; zuerst auf `kai-entry-pre` testen, dann nach `/usr/local/sbin` auf `webui1` kopieren; erst wenn das Admin-Passwort in der KeePass liegt, `/opt/kai/accounts.txt` mit `shred -u` löschen | auf `kai-entry-pre` zweimal gelaufen, beim zweiten nichts geändert; auf `webui1` gibt es kein `accounts.txt` mehr | Code in `main` (PR #17), laut PR auf den Pre-VMs geprüft; nicht ausgerollt |
+| 3.12 | **Stand von `main` ausrollen:** `make check`, dann `make deploy LIMIT=webui1` und `make deploy LIMIT=kai1`; neue Stücke: Platzprüfung und Aufräumen der Images, Modell vorladen, `kai_extra_hosts` | zweiter Lauf `changed=0`; `kai-smoke --target entry` und `--target gpu` grün | erledigt 10.11.: `make check` auf `webui1` `changed=0`, auf `kai1` nur die Apt-Caches; `kai-smoke` auf beiden grün; Root von `kai1` steht in Terraform weiter auf 30 GB (offener Punkt 3) |
+| 3.13 | **`kai-bootstrap` ohne Passwortdatei:** Startpasswörter einmal anzeigen, beim zweiten Lauf `KAI_ADMIN_PASSWORD` oder eine Abfrage; zuerst auf `kai-entry-pre` testen, dann nach `/usr/local/sbin` auf `webui1` kopieren; erst wenn das Admin-Passwort in der KeePass liegt, `/opt/kai/accounts.txt` mit `shred -u` löschen | auf `kai-entry-pre` zweimal gelaufen, beim zweiten nichts geändert; auf `webui1` gibt es kein `accounts.txt` mehr | erledigt 10.11.: Code aus PR #17, laut PR auf den Pre-VMs geprüft; `kai-bootstrap` und `kai-smoke` aus `main` in `/usr/local/sbin` auf `webui1`, `accounts.txt` gelöscht |
 
 ## Phase 4 — Pförtner: `kai1` bei Bedarf starten, nach Leerlauf stoppen
 
-Das Konzept steht in [05](05_vorschlag-auto-stop.md); Rolle `kai_pfoertner` und `kai/bin/kai-pfoertner` sind mit PR #17 in `main`, laut PR auf den Pre-VMs geprüft, aber nicht ausgerollt. Uwe hat die Instanzrolle von `webui1` am 10.11. erweitert ([aws/webui1/iam.tf](../../aws/webui1/iam.tf)): `ec2:StartInstances`/`StopInstances` gelten nur für die Instanz-ID von `kai1` statt per Tag, `ec2:DescribeInstances` für alle Instanzen. Der CloudWatch-Alarm als Sicherheitsnetz fehlt.
+Das Konzept steht in [05](05_vorschlag-auto-stop.md); Rolle `kai_pfoertner` und `kai/bin/kai-pfoertner` sind mit PR #17 in `main` und laufen seit 10.11. auf `webui1`; LiteLLM erreicht `kai1` nur noch über den Pförtner. Uwe hat die Instanzrolle von `webui1` am 10.11. erweitert ([aws/webui1/iam.tf](../../aws/webui1/iam.tf)): `ec2:StartInstances`/`StopInstances` gelten nur für die Instanz-ID von `kai1` statt per Tag, `ec2:DescribeInstances` für alle Instanzen. Der CloudWatch-Alarm als Sicherheitsnetz fehlt.
 
 ## Arbeitsweise
 
@@ -107,5 +107,5 @@ Das Konzept steht in [05](05_vorschlag-auto-stop.md); Rolle `kai_pfoertner` und 
 3. `kai-gpu` (`kai1`): Root von 30 auf 50 GB, beantragt; Terraform steht weiter auf 30 GB, und 30 GB liefen beim Wechsel des CUDA-Images voll ([02 §1.7](02_anforderungen-infrastruktur.md)).
 4. Budget-Grenze für die Betriebsstunden von `kai-gpu` und den Dauerbetrieb von `kai-entry` (S1-03).
 5. Datenschutz-Regeln für den Prototyp festhalten (S1-04): wer in Open WebUI Admin ist, wie lange Chats aufbewahrt werden, ob und wann externe Modelle über LiteLLM freigegeben werden.
-6. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung); für den Start so akzeptiert. `accounts.txt` fällt mit 3.13 weg.
+6. Konten-Datenbank verschlüsseln: Postgres von Open WebUI auf `kai-data` (EBS-Verschlüsselung); für den Start so akzeptiert.
 7. Pförtner (Phase 4): Entscheidungen aus [05](05_vorschlag-auto-stop.md); ob Uwe den CloudWatch-Alarm noch anlegt, ist offen.
