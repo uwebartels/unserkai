@@ -49,7 +49,7 @@ LiteLLM hört heute nur auf `127.0.0.1:4000` der Instanz. Wie Harnesses dorthin 
 
 ## Auswertung
 
-Open WebUI schickt die E-Mail des angemeldeten Nutzers im Header `X-OpenWebUI-User-Email`, LiteLLM bucht die Anfrage damit auf denselben Nutzer wie die Harness-Keys. Preise sind nicht gesetzt, also zählen nur Tokens (Spend bleibt 0).
+Open WebUI schickt die E-Mail des angemeldeten Nutzers im Header `X-OpenWebUI-User-Email`, LiteLLM bucht die Anfrage damit auf denselben Nutzer wie die Harness-Keys. Preise sind nicht gesetzt, also zählen nur Tokens (Spend bleibt 0). LiteLLM bucht auf die `user_id`, nicht auf das Feld `user_email`: Ein in der LiteLLM-UI angelegter Nutzer bekommt eine zufällige `user_id` und sammelt deshalb nichts; Nutzer legt nur `kai-bootstrap` an, der Admin ist bloß ein UI-Login. `kai-smoke --target entry --user-email MAIL@BEISPIEL` prüft die Zuordnung für einen Nutzer.
 
 - Admin-UI von LiteLLM (über den Tunnel auf Port 4000, Anmeldung mit dem Master-Key): Seite „Usage“, Filter nach Nutzer.
 - API: `curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" "http://127.0.0.1:4000/spend/logs?user_id=MAIL@BEISPIEL"`.

@@ -13,8 +13,8 @@
 #   --timeout SECONDS     curl --max-time for the chat call (default 180)
 #   --min-free-gb N       Minimum free GB for / and the compose directory (default 5)
 #   --no-chat             Skip the chat completion check
-#   --admin-email EMAIL   LiteLLM user to check for usage per user (entry; default env KAI_ADMIN_EMAIL);
-#                         without it the checks litellm-user and usage-per-user are skipped
+#   --user-email EMAIL    Open WebUI user whose LiteLLM user (user_id = e-mail) the entry checks use
+#                         (default env KAI_SMOKE_USER); without it litellm-user and usage-per-user are skipped
 #   -h|--help             Print this usage and exit 0
 set -euo pipefail
 
@@ -58,7 +58,7 @@ model=
 timeout=180
 min_free_gb=5
 no_chat=0
-admin_email=${KAI_ADMIN_EMAIL:-}
+user_email=${KAI_SMOKE_USER:-}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -158,13 +158,13 @@ while [[ $# -gt 0 ]]; do
       no_chat=1
       shift
       ;;
-    --admin-email)
+    --user-email)
       if [[ $# -lt 2 ]]; then
         printf 'error: missing argument for %s\n' "$1" >&2
         usage >&2
         exit 2
       fi
-      admin_email=$2
+      user_email=$2
       shift 2
       ;;
     -h|--help)
@@ -389,16 +389,16 @@ if [[ $target == entry ]]; then
     skip gpu-models "gpu-url not set"
   fi
 
-  # Check: litellm-user (kai-bootstrap step litellm-users created the admin as LiteLLM user)
+  # Check: litellm-user (kai-bootstrap step litellm-users created this user)
   user_tracked=0
-  if [[ -z "$admin_email" ]]; then
-    skip litellm-user "--admin-email / KAI_ADMIN_EMAIL not set"
+  if [[ -z "$user_email" ]]; then
+    skip litellm-user "--user-email / KAI_SMOKE_USER not set"
   elif [[ -z ${LITELLM_MASTER_KEY:-} ]]; then
     skip litellm-user "LITELLM_MASTER_KEY not set"
   else
     http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' -G -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-      --data-urlencode "user_id=$admin_email" "$litellm_url/user/info" 2>/dev/null) || http_code=000
-    if [[ "$http_code" == "200" ]] && python3 -c 'import json,sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("user_info") or {}).get("user_id") == sys.argv[2] else 1)' "$tmpfile" "$admin_email" 2>/dev/null; then
+      --data-urlencode "user_id=$user_email" "$litellm_url/user/info" 2>/dev/null) || http_code=000
+    if [[ "$http_code" == "200" ]] && python3 -c 'import json,sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("user_info") or {}).get("user_id") == sys.argv[2] else 1)' "$tmpfile" "$user_email" 2>/dev/null; then
       pass litellm-user
       user_tracked=1
     else
@@ -406,14 +406,14 @@ if [[ $target == entry ]]; then
     fi
   fi
 
-  # Count the admin's spend logs, so usage-per-user can see whether the chat added one.
+  # Count the user's spend logs, so usage-per-user can see whether the chat added one.
   spend_logs_count() {
-    curl -sS -G -H "Authorization: Bearer $LITELLM_MASTER_KEY" --data-urlencode "user_id=$admin_email" \
+    curl -sS -G -H "Authorization: Bearer $LITELLM_MASTER_KEY" --data-urlencode "user_id=$user_email" \
       "$litellm_url/spend/logs" 2>/dev/null |
       python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else -1)' 2>/dev/null || echo -1
   }
 
-  # Check: chat (with Open WebUI's e-mail header when the admin is known, as Open WebUI sends it)
+  # Check: chat (with Open WebUI's e-mail header when the user is known, as Open WebUI sends it)
   chat_ok=0
   if [[ $no_chat -eq 1 ]]; then
     skip chat "--no-chat specified"
@@ -425,7 +425,7 @@ if [[ $target == entry ]]; then
     user_header=
     if [[ $user_tracked -eq 1 ]]; then
       logs_before=$(spend_logs_count)
-      user_header="X-OpenWebUI-User-Email: $admin_email"
+      user_header="X-OpenWebUI-User-Email: $user_email"
     fi
     start_time=$(date +%s)
     http_code=$(chat_request "$litellm_url/v1/chat/completions" "Authorization: Bearer $LITELLM_MASTER_KEY" "$user_header") || http_code=000
@@ -440,7 +440,7 @@ if [[ $target == entry ]]; then
     fi
   fi
 
-  # Check: usage-per-user (user_header_mappings books the chat on the admin).
+  # Check: usage-per-user (user_header_mappings books the chat on that user).
   # Optional: it needs the chat, so a run with --no-chat or a stopped kai-gpu skips it instead of failing.
   if [[ $user_tracked -eq 0 || $chat_ok -eq 0 ]]; then
     skip usage-per-user "needs litellm-user and chat"
@@ -457,7 +457,7 @@ if [[ $target == entry ]]; then
     if [[ $logs_after -gt $logs_before ]]; then
       pass usage-per-user
     else
-      fail usage-per-user "no new spend log for $admin_email after 60s; user_header_mappings active?"
+      fail usage-per-user "no new spend log for $user_email after 60s; user_header_mappings active?"
     fi
   fi
 else

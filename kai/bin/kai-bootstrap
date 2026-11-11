@@ -415,10 +415,13 @@ class LiteLLM:
             return (False, '')
         return (None, f'GET /user/info: status={status}')
 
-    def create_user(self, user_id: str, alias: str) -> Tuple[bool, str]:
+    def create_user(self, user_id: str, alias: str) -> Tuple[Optional[bool], str]:
+        """True if created, None if the e-mail belongs to a user with another user_id (409), else False."""
         status, _ = http_request(f'{self.url}/user/new', method='POST', bearer_token=self.key, data={
             'user_id': user_id, 'user_email': user_id, 'user_alias': alias,
             'user_role': 'internal_user', 'auto_create_key': False})
+        if status == 409:
+            return (None, 'e-mail exists under another user_id (made in the LiteLLM UI?)')
         return (status == 200, f'POST /user/new: status={status}')
 
     def key_alias_exists(self, alias: str) -> Tuple[Optional[bool], str]:
@@ -446,6 +449,8 @@ def step_litellm_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple
 
     Existing users are left unchanged. Open WebUI's e-mail header (user_header_mappings) and
     harness keys book on these users, so the e-mails must match Open WebUI's accounts.
+    The admin may already exist as a LiteLLM UI login with a generated user_id; that is only
+    reported, while a users-file e-mail under another user_id fails, as its usage would be lost.
     """
     if 'litellm-users' in args.skip:
         return (True, 'skipped by user')
@@ -462,6 +467,7 @@ def step_litellm_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple
     if not client:
         return (False, 'LITELLM_MASTER_KEY not found in env file')
     created = 0
+    notes = []
     for name, email in wanted:
         exists, why = client.user_exists(email)
         if exists is None:
@@ -469,10 +475,13 @@ def step_litellm_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple
         if exists:
             continue
         ok, why = client.create_user(email, name)
+        if ok is None and email == args.admin_email:
+            notes.append(f'admin {email} left as is: {why}')
+            continue
         if not ok:
-            return (False, f'{email}: {why}')
+            return (False, f'{email}: {why}; delete that user in the LiteLLM UI to book usage on the e-mail')
         created += 1
-    return (True, f'created {created} of {len(wanted)} users')
+    return (True, '; '.join([f'created {created} of {len(wanted)} users'] + notes))
 
 
 def step_harness_keys(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
