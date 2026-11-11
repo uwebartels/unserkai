@@ -5,6 +5,8 @@
   roles:
     - role: common
       tags: [common, base]
+    - role: kai_updates
+      tags: [kai_updates, base]
     - role: users
       tags: [users]
     - role: kai_volume
@@ -22,6 +24,8 @@
   roles:
     - role: common
       tags: [common, base]
+    - role: kai_updates
+      tags: [kai_updates, base]
     - role: users
       tags: [users]
     - role: kai_volume

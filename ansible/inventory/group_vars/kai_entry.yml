@@ -34,3 +34,6 @@ kai_pfoertner_min_runtime_minutes: 10
 # Frueher Start, sobald sich jemand in Open WebUI anmeldet (nur im Zeitfenster, z. B. "7-23"; leer = immer).
 kai_pfoertner_wake_on_login: true
 kai_pfoertner_login_window: ""
+
+# Laeuft staendig, also aktiviert nur ein Neustart einen automatisch installierten Kernel (Rolle kai_updates).
+kai_updates_automatic_reboot: true

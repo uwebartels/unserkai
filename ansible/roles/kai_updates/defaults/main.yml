@@ -1,0 +1,21 @@
+---
+# Automatic updates: only Debian-Security, kernels included (house fleet policy core_24, without its kernel blacklist).
+
+# Upgrade slots, every 6 h plus random delay; a missed slot is not caught up at boot but by the boot timer below.
+kai_updates_calendar: "*-*-* 00/6:00:00"
+kai_updates_randomized_delay: 30min
+
+# One run after every boot, after the model has been loaded (05_vorschlag-auto-stop.md section 7).
+kai_updates_boot_delay: 8min
+
+# Reboot by unattended-upgrades when a kernel needs it; only for machines that never stop on their own.
+kai_updates_automatic_reboot: false
+kai_updates_reboot_time: "04:00"
+
+# Units needrestart never restarts on its own, in addition to its defaults (docker, dbus, network*, logind, getty).
+# amazon-ssm-agent carries every Ansible and shell session.
+kai_updates_restart_skip:
+  - containerd
+  - systemd-networkd
+  - systemd-resolved
+  - amazon-ssm-agent

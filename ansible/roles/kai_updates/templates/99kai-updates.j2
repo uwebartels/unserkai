@@ -1,0 +1,17 @@
+// {{ ansible_managed }}
+// Sorts last in apt.conf.d; #clear removes whatever 50unattended-upgrades adds.
+APT::Periodic::Update-Package-Lists "always";
+APT::Periodic::Unattended-Upgrade "always";
+APT::Update::Error-Mode "any";
+
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+#clear Unattended-Upgrade::Package-Blacklist;
+
+Unattended-Upgrade::Mail "";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Automatic-Reboot "{{ kai_updates_automatic_reboot | bool | lower }}";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ kai_updates_reboot_time }}";

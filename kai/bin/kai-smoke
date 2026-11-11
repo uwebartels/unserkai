@@ -525,6 +525,59 @@ else
   fi
 fi
 
+# Check: boot-config (house rule core_09: the files a reboot depends on must parse on the machine itself)
+if [[ $EUID -ne 0 ]]; then
+  skip boot-config "needs root"
+else
+  if sshd -t >/dev/null 2>&1; then pass boot-config-sshd; else fail boot-config-sshd "$(sshd -t 2>&1 | head -1)"; fi
+  if findmnt --verify >/dev/null 2>&1; then pass boot-config-fstab; else fail boot-config-fstab "$(findmnt --verify 2>&1 | grep -m1 -E '\[[EW]\]' || true)"; fi
+  if visudo -c >/dev/null 2>&1; then pass boot-config-sudoers; else fail boot-config-sudoers "$(visudo -c 2>&1 | grep -vm1 'parsed OK' || true)"; fi
+  mapfile -t own_units < <(find /etc/systemd/system -maxdepth 1 -type f \( -name 'kai-*.service' -o -name 'kai-*.timer' \))
+  if ((${#own_units[@]} == 0)); then
+    skip boot-config-units "no own units"
+  elif verify_out=$(systemd-analyze verify "${own_units[@]}" 2>&1) && [[ -z "$verify_out" ]]; then
+    pass "boot-config-units (${#own_units[@]})"
+  else
+    fail boot-config-units "$(head -1 <<< "$verify_out")"
+  fi
+fi
+
+# Check: security-updates (policy of the role kai_updates; reported here instead of by mail)
+origins=$(apt-config dump 2>/dev/null | sed -n 's/^Unattended-Upgrade::Origins-Pattern:: "\(.*\)";$/\1/p')
+if [[ -z "$origins" ]]; then
+  fail security-updates-policy "no Origins-Pattern (role kai_updates not applied?)"
+elif grep -qv -- '-security,label=Debian-Security$' <<< "$origins"; then
+  fail security-updates-policy "non-security origin: $(grep -v -- '-security,label=Debian-Security$' <<< "$origins" | head -1)"
+else
+  pass security-updates-policy
+fi
+
+uptime_s=$(cut -d. -f1 /proc/uptime)
+stamp=/var/lib/apt/periodic/upgrade-stamp
+stamp_age_h=-1
+[[ -e $stamp ]] && stamp_age_h=$((($(date +%s) - $(stat -c %Y "$stamp")) / 3600))
+upgrade_result=$(systemctl show -p Result --value apt-daily-upgrade.service 2>/dev/null || true)
+if [[ $upgrade_result != success ]]; then
+  fail security-updates-run "apt-daily-upgrade.service result: ${upgrade_result:-unknown} (journalctl -u apt-daily-upgrade)"
+elif ((stamp_age_h >= 0 && stamp_age_h <= 7)); then
+  pass "security-updates-run (${stamp_age_h} h ago)"
+elif ((uptime_s < 3600)); then
+  skip security-updates-run "booted $((uptime_s / 60)) min ago, first run 8 min after boot"
+else
+  fail security-updates-run "last run ${stamp_age_h} h ago, want <= 7 h"
+fi
+
+if [[ -e /run/reboot-required ]]; then
+  reboot_age_h=$((($(date +%s) - $(stat -c %Y /run/reboot-required)) / 3600))
+  if [[ $target == entry && $reboot_age_h -ge 26 ]]; then
+    fail kernel-reboot "pending for ${reboot_age_h} h, the nightly automatic reboot did not happen"
+  else
+    skip kernel-reboot "pending for ${reboot_age_h} h ($([[ $target == entry ]] && echo 'nightly automatic reboot' || echo 'next stop and start'))"
+  fi
+else
+  pass kernel-reboot
+fi
+
 if [[ $failures -eq 0 ]]; then
   printf 'kai-smoke: all checks passed\n'
   exit 0

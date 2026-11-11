@@ -104,6 +104,7 @@ Passwort-Hashes hinterlegen und den Wert auf `false` setzen.
 | Rolle | Zweck | Wichtige Variablen |
 | --- | --- | --- |
 | `common` | apt-Update, Basispakete, Zeitzone | `common_packages`, `common_timezone`, `common_upgrade_packages` |
+| `kai_updates` | Nur Sicherheitsupdates automatisch (Kernel eingeschlossen), alle 6 h und 8 min nach dem Boot, Dienst-Neustarts per needrestart nur in diesem Lauf, Kontrolle mit `kai-smoke` | `kai_updates_boot_delay`, `kai_updates_automatic_reboot` (nur `kai_entry`), `kai_updates_restart_skip` |
 | `users` | Konten, sudoers, SSH-Keys | `users_managed`, `users_passwordless_sudo` |
 | `docker` | Docker CE, Buildx, Compose, Daemon-Konfiguration | `docker_packages`, `docker_daemon_config`, `docker_users` |
 | `cmake` | CMake und Build-Werkzeuge | `cmake_packages`, `cmake_install_build_tools` |

@@ -1,0 +1,116 @@
+---
+- name: Pakete fuer automatische Updates installieren
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - needrestart
+    state: present
+
+- name: Update-Policy schreiben
+  ansible.builtin.template:
+    src: 99kai-updates.j2
+    dest: /etc/apt/apt.conf.d/99kai-updates
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Needrestart nur im automatischen Lauf neu starten lassen
+  ansible.builtin.template:
+    src: needrestart.conf.j2
+    dest: /etc/needrestart/conf.d/90-kai-updates.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Verzeichnisse fuer systemd-Drop-ins anlegen
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - apt-daily.service
+    - apt-daily-upgrade.service
+    - apt-daily-upgrade.timer
+
+- name: Paketlisten-Lauf begrenzen
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role kai_updates
+      # A hanging apt-get update must not hold back every upgrade run behind it.
+      [Service]
+      TimeoutStartSec=30min
+    dest: /etc/systemd/system/apt-daily.service.d/kai-updates.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Systemd neu laden
+
+- name: Upgrade-Lauf mit frischen Paketlisten und Neustarts der Dienste
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role kai_updates
+      [Unit]
+      Wants=apt-daily.service
+      After=apt-daily.service
+      [Service]
+      Environment=NEEDRESTART_MODE=a
+    dest: /etc/systemd/system/apt-daily-upgrade.service.d/kai-updates.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Systemd neu laden
+
+- name: Upgrade-Zeitplan setzen, ohne Nachholen beim Boot
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role kai_updates
+      [Timer]
+      OnCalendar=
+      OnCalendar={{ kai_updates_calendar }}
+      RandomizedDelaySec={{ kai_updates_randomized_delay }}
+      Persistent=false
+    dest: /etc/systemd/system/apt-daily-upgrade.timer.d/kai-updates.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Upgrade-Timer neu starten
+
+- name: Upgrade-Lauf nach dem Boot verzoegern
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role kai_updates
+      [Unit]
+      Description=Security updates {{ kai_updates_boot_delay }} after boot
+
+      [Timer]
+      OnBootSec={{ kai_updates_boot_delay }}
+      AccuracySec=1s
+      Unit=apt-daily-upgrade.service
+
+      [Install]
+      WantedBy=timers.target
+    dest: /etc/systemd/system/kai-updates-boot.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Systemd neu laden
+
+# The upgrade service pulls apt-daily.service itself; its own timer would fetch right at boot (Persistent=true).
+- name: Eigenen Timer der Paketlisten abschalten
+  ansible.builtin.systemd:
+    name: apt-daily.timer
+    enabled: false
+    state: stopped
+
+- name: Systemd-Aenderungen vor dem Aktivieren laden
+  ansible.builtin.meta: flush_handlers
+
+- name: Timer aktivieren
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+  loop:
+    - apt-daily-upgrade.timer
+    - kai-updates-boot.timer

@@ -65,3 +65,20 @@
       {{ ip }} {{ name }}
       {% endfor %}
   when: kai_extra_hosts | default({}) | length > 0
+
+# core_13 of the house setup; emergency access is the SSM shell session, which does not depend on sshd.
+- name: Sshd haerten
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role common; sorts before other drop-ins, sshd takes the first value.
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      X11Forwarding no
+      AllowAgentForwarding no
+    dest: /etc/ssh/sshd_config.d/05-kai.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Sshd neu laden

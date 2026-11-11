@@ -259,7 +259,7 @@ Warum der Stopper im Pförtner sitzt und nicht auf `kai1` selbst: Der Pförtner 
 |---|---|---|
 | Laden ab Boot (durch den Pförtner, siehe [4.4](#44-fortschrittsanzeige); das starre `kai_gpu_preload` entfällt) | Modell lädt, sobald llama-swap läuft, statt ab erster Anfrage; Voraussetzung dafür, dass der Frühstart wirkt | keine |
 | gp3-Durchsatz von `kai-models` auf ≈ 400 MiB/s (mehr kann die g4dn.xlarge nicht) | Modell ≈ 30 s statt ≈ 100 s | ≈ 15 $/Monat; 250 MiB/s: ≈ 50 s für ≈ 6 $/Monat; ohne Ausfall änderbar |
-| `apt-daily` und `unattended-upgrades` nach dem Boot verzögern | wenige s; sie teilen die Plattengeschwindigkeit mit dem Modell | keine |
+| `apt-daily` und `unattended-upgrades` nach dem Boot verzögern (umgesetzt mit der Rolle `kai_updates`: erster Lauf 8 min nach dem Boot) | wenige s; sie teilen die Plattengeschwindigkeit mit dem Modell | keine |
 
 Vor dem Anheben des Durchsatzes wird gemessen, ob llama.cpp das Tempo beim Laden überhaupt abruft (`dd` gegen die Ladezeit, sonst `--no-mmap`).
 

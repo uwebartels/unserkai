@@ -1,0 +1,6 @@
+---
+# reload, never restart: a running session survives a bad file.
+- name: Sshd neu laden
+  ansible.builtin.systemd:
+    name: ssh
+    state: reloaded
