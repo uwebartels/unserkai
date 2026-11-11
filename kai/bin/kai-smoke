@@ -7,7 +7,7 @@
 #   --litellm-url URL     LiteLLM base URL (default http://127.0.0.1:4000)
 #   --gpu-url URL         Direct GPU model server base URL (default empty for entry,
 #                         http://127.0.0.1:8080 for gpu)
-#   --env-file FILE       Env file to read LITELLM_MASTER_KEY from (default /opt/kai/.env)
+#   --env-file FILE       Env file to read LITELLM_MASTER_KEY and LLAMA_SWAP_KEY from (default /opt/kai/.env)
 #   --compose-dir DIR     Compose project directory (default /opt/kai)
 #   --model ID            Model id for the chat call (default: first id from /v1/models)
 #   --timeout SECONDS     curl --max-time for the chat call (default 180)
@@ -229,17 +229,28 @@ chat_request() {
   curl "${args[@]}" "$url" 2>/dev/null
 }
 
-# Read LITELLM_MASTER_KEY from env file if not already set in environment.
-# This is only needed for the entry stack.
-if [[ $target == entry && -z ${LITELLM_MASTER_KEY:-} ]]; then
-  if file_exists "$env_file"; then
-    # The env file is 0600 root, so a normal user reads it through sudo.
-    if [[ -r "$env_file" ]]; then
-      LITELLM_MASTER_KEY=$(grep '^LITELLM_MASTER_KEY=' "$env_file" | head -1 | cut -d'=' -f2- || true)
-    else
-      LITELLM_MASTER_KEY=$(sudo grep '^LITELLM_MASTER_KEY=' "$env_file" | head -1 | cut -d'=' -f2- || true)
-    fi
+# Read a KEY=value from the env file; it is 0600 root, so a normal user reads it through sudo.
+read_env_var() {
+  if [[ -r "$env_file" ]]; then
+    grep "^$1=" "$env_file" | head -1 | cut -d'=' -f2- || true
+  else
+    sudo grep "^$1=" "$env_file" | head -1 | cut -d'=' -f2- || true
   fi
+}
+
+# LITELLM_MASTER_KEY (entry only) and LLAMA_SWAP_KEY (both stacks; llama-swap requires it) from the env file
+# unless already set in the environment.
+if file_exists "$env_file"; then
+  if [[ $target == entry && -z ${LITELLM_MASTER_KEY:-} ]]; then
+    LITELLM_MASTER_KEY=$(read_env_var LITELLM_MASTER_KEY)
+  fi
+  if [[ -z ${LLAMA_SWAP_KEY:-} ]]; then
+    LLAMA_SWAP_KEY=$(read_env_var LLAMA_SWAP_KEY)
+  fi
+fi
+gpu_auth=()
+if [[ -n ${LLAMA_SWAP_KEY:-} ]]; then
+  gpu_auth=(-H "Authorization: Bearer $LLAMA_SWAP_KEY")
 fi
 
 # Check: compose-health
@@ -379,7 +390,7 @@ if [[ $target == entry ]]; then
 
   # Check: gpu-models
   if [[ -n "$gpu_url" ]]; then
-    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "$gpu_url/v1/models" 2>/dev/null) || http_code=000
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "${gpu_auth[@]}" "$gpu_url/v1/models" 2>/dev/null) || http_code=000
     if [[ "$http_code" == "200" ]]; then
       pass gpu-models
     else
@@ -483,7 +494,7 @@ else
 
   # Check: gpu-models
   if [[ -n "$gpu_url" ]]; then
-    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "$gpu_url/v1/models" 2>/dev/null) || http_code=000
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "${gpu_auth[@]}" "$gpu_url/v1/models" 2>/dev/null) || http_code=000
     if [[ "$http_code" == "200" ]]; then
       pass gpu-models
       if [[ -z "$model" ]]; then
@@ -503,7 +514,7 @@ else
     skip chat "no model available"
   else
     start_time=$(date +%s)
-    http_code=$(chat_request "$gpu_url/v1/chat/completions") || http_code=000
+    http_code=$(chat_request "$gpu_url/v1/chat/completions" "${gpu_auth[1]:-}") || http_code=000
     end_time=$(date +%s)
     elapsed=$((end_time - start_time))
 

@@ -1,4 +1,7 @@
 # llama-swap fuer {{ inventory_hostname }}; von Ansible aus kai_gpu_models erzeugt.
+# Jede Anfrage braucht diesen Key (kai/docs/08_haertung.md M7); fehlt die Variable, startet llama-swap nicht.
+apiKeys:
+  - ${env.LLAMA_SWAP_KEY}
 healthCheckTimeout: {{ kai_gpu_health_check_timeout | default(600) }}
 logLevel: info
 {% if kai_gpu_preload | default([]) | length > 0 %}

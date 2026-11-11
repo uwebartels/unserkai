@@ -96,7 +96,7 @@ Ein Sprachmodell **speichert nichts**. Was gespeichert wird (Chats, Uploads), li
 
 - Alle Geheimnisse liegen auf `kai-entry` in `/opt/kai/.env`, Rechte `0600 root`, **nicht** im Git: `BRAVE_API_KEY`, `WEBUI_SECRET_KEY` (signiert Sitzungen), `LITELLM_MASTER_KEY` (Admin-Key von LiteLLM), `LITELLM_SALT_KEY` (verschlüsselt gespeicherte Anbieter-Keys, darf nach dem ersten Start nie wechseln), `LITELLM_DB_PASSWORD`; später `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`. Im Repo liegt nur [`compose/entry/.env.example`](../compose/entry/.env.example) mit Platzhaltern.
 - Virtuelle Keys für Nutzer und Harnesses entstehen in LiteLLM (UI oder API) und liegen in der Postgres-Datenbank, nicht in `.env`.
-- `kai-gpu` hat kein Geheimnis: llama-swap verlangt keinen Key, der Schutz ist die Security Group.
+- `kai-gpu` hat genau ein Geheimnis in `/opt/kai/.env` (`0600 root`): `LLAMA_SWAP_KEY`, den llama-swap (`apiKeys`) von jeder Anfrage verlangt, auch von seiner Web-UI. Derselbe Wert steht auf `kai-entry` in `.env` (LiteLLM sendet ihn, der Pförtner reicht ihn durch und liest ihn für eigene Abfragen) und in der KeePass. Erste Schutzschicht bleibt die Security Group ([08 Härtung](08_haertung.md) M1, M7).
 - Compose liest `.env` automatisch; Container bekommen Keys per `env_file`, nicht auf der Kommandozeile (sonst stehen sie in `docker inspect` und der Shell-History).
 - Ansible kopiert `.env` **nicht**; die Rolle prüft nur, dass die Datei existiert, und bricht sonst mit Hinweis ab. Master-Key, Brave-Key und `WEBUI_SECRET_KEY` zusätzlich in der Team-KeePass (`unserkai.kdbx`), das Admin-Passwort von Open WebUI nur dort.
 

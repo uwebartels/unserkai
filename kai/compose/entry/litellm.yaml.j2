@@ -11,7 +11,8 @@ model_list:
 {% else %}
       api_base: {{ kai_gpu_endpoint }}/v1
 {% endif %}
-      api_key: none
+      # llama-swap verlangt den Key (kai/docs/08_haertung.md M7); der Pfoertner reicht den Header durch.
+      api_key: os.environ/LLAMA_SWAP_KEY
       timeout: {{ kai_litellm_request_timeout }}
       stream_timeout: {{ kai_litellm_request_timeout }}
 {% endfor %}
@@ -19,6 +20,9 @@ model_list:
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
+  # Admin-UI nur mit eigenen Konten (proxy_admin); Master-Key und UI_PASSWORD gelten an der UI nicht mehr
+  # (kai/docs/08_haertung.md M2). Rueckweg bei ausgesperrtem Admin: Zeile entfernen, Stack neu starten.
+  disable_env_credential_login: true
   # Usage per person: Open WebUI sends the user's e-mail, which is the user_id of the LiteLLM
   # internal_user that kai-bootstrap creates from the same --users-file; harness keys carry the same user_id.
   user_header_mappings:

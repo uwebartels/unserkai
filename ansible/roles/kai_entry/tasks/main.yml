@@ -108,6 +108,21 @@
       Diese Rolle erstellt oder aendert die .env nicht.
     quiet: true
 
+- name: Umgebungsdatei auf LLAMA_SWAP_KEY pruefen
+  ansible.builtin.slurp:
+    src: "{{ kai_entry_install_dir }}/.env"
+  register: kai_entry_env_raw
+  no_log: true
+
+- name: LLAMA_SWAP_KEY gesetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_entry_env_raw.content | b64decode is regex('(?m)^LLAMA_SWAP_KEY=\\S+')
+    fail_msg: >-
+      In {{ kai_entry_install_dir }}/.env fehlt LLAMA_SWAP_KEY (Key, den llama-swap auf kai-gpu verlangt;
+      derselbe Wert wie dort, siehe kai/compose/entry/.env.example).
+    quiet: true
+
 - name: Rechte der Umgebungsdatei pruefen
   ansible.builtin.assert:
     that:

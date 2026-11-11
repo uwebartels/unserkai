@@ -39,6 +39,7 @@ class FakeBackend:
         self.request_count = 0
         self.slow = False
         self.health_ok = True
+        self.api_key = ""  # when set, every request must carry it (llama-swap apiKeys)
 
         self.port = free_port()
         self.url = "http://127.0.0.1:%d" % self.port
@@ -69,7 +70,17 @@ class FakeBackend:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _authorized(self):
+                if not backend.api_key:
+                    return True
+                if self.headers.get("Authorization") == "Bearer " + backend.api_key:
+                    return True
+                self._send_json(401, {"error": "unauthorized"})
+                return False
+
             def do_GET(self):
+                if not self._authorized():
+                    return
                 parsed = urllib.parse.urlsplit(self.path)
                 path = parsed.path
 
@@ -104,6 +115,8 @@ class FakeBackend:
                 self._send_json(404, {"error": "not found"})
 
             def do_POST(self):
+                if not self._authorized():
+                    return
                 parsed = urllib.parse.urlsplit(self.path)
                 path = parsed.path
 
@@ -261,10 +274,10 @@ class KaiPfoertnerEndToEndTest(unittest.TestCase):
     def base_url(self):
         return "http://127.0.0.1:%d" % self.pfoertner_port
 
-    def http_json(self, method, path, body=None):
+    def http_json(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.pfoertner_port, timeout=15)
         try:
-            headers = {}
+            headers = dict(headers or {})
             data = None
             if body is not None:
                 data = json.dumps(body).encode("utf-8")
@@ -346,6 +359,24 @@ class KaiPfoertnerEndToEndTest(unittest.TestCase):
 
     def provider_state(self):
         return self.app.provider.state("sim-1")
+
+    def test_backend_api_key_from_file(self):
+        # Backend requires a key; the pfoertner reads it from a dotenv file for its own probes
+        # and the proxied request carries the client's header.
+        self.backend.api_key = "sk-test"
+        key_file = os.path.join(self.tmpdir.name, "env")
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write("OTHER=x\nLLAMA_SWAP_KEY=sk-test\n")
+        cfg = self.make_config(api_key_file=key_file)
+        self.start_app(cfg)
+        machine = self.app.machines["kai1"]
+        self.assertEqual(machine.api_key, "sk-test")
+        self.assertTrue(machine._health_ok())
+        status, body = self.http_json(
+            "POST", "/kai1/v1/chat/completions", {"model": "b", "messages": []},
+            headers={"Authorization": "Bearer sk-test"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.backend.loaded_models(), {"b"})
 
     def test_models_endpoint_does_not_wake(self):
         self.start_app(self.make_config())

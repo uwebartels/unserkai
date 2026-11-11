@@ -3,6 +3,8 @@
 kai_pfoertner_src: "{{ playbook_dir }}/../../kai/bin/kai-pfoertner"
 kai_pfoertner_bin: /usr/local/bin/kai-pfoertner
 kai_pfoertner_config_dir: /etc/kai-pfoertner
+# .env des Entry-Stacks; daraus liest der Pfoertner LLAMA_SWAP_KEY fuer seine eigenen Abfragen an llama-swap.
+kai_pfoertner_api_key_file: /opt/kai/.env
 # Dienst im Compose-Stack, in dessen Log der Fruehstart die Anmeldungen liest.
 kai_pfoertner_login_log_service: open-webui
 # Die Betriebswerte (Port, Maschine, Provider, Leerlaufzeit, ...) stehen in group_vars/kai_entry.yml,

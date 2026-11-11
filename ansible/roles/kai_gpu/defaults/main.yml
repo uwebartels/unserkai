@@ -16,6 +16,9 @@ kai_gpu_driver_install: "{{ kai_gpu_enabled }}"
 kai_gpu_driver_branch: "620"
 kai_gpu_bind: "127.0.0.1"
 kai_gpu_port: 8080
+# Optional: fertige .env (LLAMA_SWAP_KEY), die ein Mensch vorab auf der Maschine ablegt (root, 0600); leer = .env
+# muss schon in kai_gpu_install_dir liegen. Die Rolle kopiert sie nur, wenn dort keine .env existiert.
+kai_gpu_env_seed: ""
 # Sekunden, die 'docker compose up --wait' auf gesunde Dienste wartet.
 kai_gpu_wait_timeout: 300
 # Gemeinsame Argumente fuer 'docker compose'; ohne GPU kommt compose.cpu.yaml dazu.

@@ -128,6 +128,68 @@
     group: root
     mode: "0644"
 
+# Die .env mit LLAMA_SWAP_KEY legt ein Mensch an (kai/compose/gpu/.env.example); Muster wie in der Rolle kai_entry.
+- name: Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_stat
+
+- name: Vorlage der Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_env_seed }}"
+  register: kai_gpu_env_seed_stat
+  when:
+    - kai_gpu_env_seed | length > 0
+    - not kai_gpu_env_stat.stat.exists
+
+- name: Umgebungsdatei aus der Vorlage anlegen
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_env_seed }}"
+    dest: "{{ kai_gpu_install_dir }}/.env"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - kai_gpu_env_seed_stat.stat is defined
+    - kai_gpu_env_seed_stat.stat.exists
+
+- name: Umgebungsdatei erneut pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_stat
+
+- name: Umgebungsdatei vorhanden und geschuetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_gpu_env_stat.stat.exists
+      - kai_gpu_env_stat.stat.mode == '0600'
+    fail_msg: >-
+      Die Datei {{ kai_gpu_install_dir }}/.env fehlt oder hat nicht den Modus 0600.
+      Bitte aus kai/compose/gpu/.env.example kopieren, LLAMA_SWAP_KEY eintragen
+      (derselbe Wert wie auf kai-entry), Modus 0600 setzen und die Rolle erneut ausfuehren.
+    quiet: true
+
+- name: Key fuer llama-swap aus der Umgebungsdatei lesen
+  ansible.builtin.slurp:
+    src: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_raw
+  no_log: true
+
+- name: Key fuer llama-swap festhalten
+  ansible.builtin.set_fact:
+    kai_gpu_api_key: "{{ (kai_gpu_env_raw.content | b64decode | regex_search('(?m)^LLAMA_SWAP_KEY=(.*)$', '\\1') or ['']) | first | trim }}"
+  no_log: true
+
+- name: Key fuer llama-swap gesetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_gpu_api_key | length > 0
+    fail_msg: "LLAMA_SWAP_KEY in {{ kai_gpu_install_dir }}/.env ist leer."
+    quiet: true
+
 - name: Modell-Skript installieren
   ansible.builtin.copy:
     src: "{{ kai_gpu_models_pull_src }}"
@@ -183,8 +245,11 @@
 - name: Modellkatalog abfragen
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ kai_gpu_port }}/v1/models"
+    headers:
+      Authorization: "Bearer {{ kai_gpu_api_key }}"
     return_content: true
   register: kai_gpu_models_response
+  no_log: true
   check_mode: false
   retries: 12
   delay: 5

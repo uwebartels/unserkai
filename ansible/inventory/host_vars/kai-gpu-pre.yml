@@ -13,3 +13,5 @@ kai_gpu_models:
 kai_volume_required: true
 # Datenplatte (Seriennummer = Label); die Ersatzplatte fuer das Instance Storage heisst virtio-kai-scratch.
 kai_volume_device: /dev/disk/by-id/virtio-kai-models
+# Test-Seed mit einem Dummy-LLAMA_SWAP_KEY (root, 0600), legt der Agent vor dem Lauf an; Nachweis fuer kai_gpu_env_seed.
+kai_gpu_env_seed: /root/kai-gpu.env

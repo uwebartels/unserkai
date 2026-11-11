@@ -10,6 +10,8 @@
     kai_pfoertner_machine: {
       'instance_id': kai_pfoertner_instance_id,
       'endpoint': kai_gpu_endpoint,
+      'api_key_file': kai_pfoertner_api_key_file,
+      'api_key_var': 'LLAMA_SWAP_KEY',
       'models': hostvars[kai_gpu_peer].kai_gpu_models | map(attribute='name') | list,
       'idle_minutes': kai_pfoertner_idle_minutes,
       'min_runtime_minutes': kai_pfoertner_min_runtime_minutes,
