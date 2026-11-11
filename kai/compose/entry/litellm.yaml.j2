@@ -22,6 +22,8 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   # Admin-UI nur mit eigenen Konten (proxy_admin); Master-Key und UI_PASSWORD gelten an der UI nicht mehr
   # (kai/docs/08_haertung.md M2). Rueckweg bei ausgesperrtem Admin: Zeile entfernen, Stack neu starten.
+  # Das gepinnte Image 1.83.14 kennt die Option noch nicht und ignoriert sie; bis zum Update sperren
+  # UI_USERNAME/UI_PASSWORD in .env den Master-Key an der UI (geprueft 11.11.: Login mit Master-Key -> 303 success).
   disable_env_credential_login: true
   # Usage per person: Open WebUI sends the user's e-mail, which is the user_id of the LiteLLM
   # internal_user that kai-bootstrap creates from the same --users-file; harness keys carry the same user_id.
