@@ -25,12 +25,18 @@ Options:
   --dry-run                Print what would happen, change nothing
   --apply-compose          After changing .env, run docker compose up -d --wait
   --skip STEP              Skip a step (repeatable)
+  --harness-key EMAIL:ALIAS  Only create a LiteLLM key for a harness (e.g. a@example.org:a-openclaw),
+                           booked on the LiteLLM user EMAIL; repeatable; needs only the master key.
+                           The key is shown once on stdout and never stored; an existing alias is
+                           refused, never replaced. Skip it with --skip harness-key.
 
 Steps:
   1. litellm-key: Generate/verify LiteLLM key for Open WebUI
   2. admin: Create or authenticate admin account
   3. openai-connection: Set Open WebUI's LiteLLM connection and key
   4. users: Create user accounts from users-file
+  4a. litellm-users: Create a LiteLLM internal_user per users-file line and for the admin
+      (user_id = e-mail, so Open WebUI's e-mail header and harness keys book on the same user)
   5. brave-tool: Register Brave MCP tool server
   6. status-filter: Install the global filter Kai-Status (start progress of kai-gpu)
   7. signup-off: Disable public signup
@@ -45,6 +51,7 @@ import os
 import secrets
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -71,11 +78,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--dry-run', action='store_true', help='Print what would happen, change nothing')
     parser.add_argument('--apply-compose', action='store_true', help='Run docker compose after .env changes')
     parser.add_argument('--skip', action='append', default=[], help='Skip a step (repeatable)')
+    parser.add_argument('--harness-key', action='append', default=[], metavar='EMAIL:ALIAS',
+                        help='Only create a LiteLLM key for a harness, booked on user EMAIL (repeatable)')
     
     args = parser.parse_args()
     
     # Validate required arguments
-    if not args.admin_email:
+    for spec in args.harness_key:
+        email, _, alias = spec.partition(':')
+        if '@' not in email or not alias:
+            print(f"[FAIL] usage: --harness-key needs EMAIL:ALIAS, got {spec!r}", file=sys.stderr)
+            sys.exit(2)
+    if not args.admin_email and not args.harness_key:
         print("[FAIL] usage: --admin-email is required (or set KAI_ADMIN_EMAIL env var)", file=sys.stderr)
         sys.exit(2)
     
@@ -370,6 +384,128 @@ def step_openai_connection(args: argparse.Namespace, state: Dict[str, Any]) -> T
     return (True, 'connection set to LiteLLM')
 
 
+def read_users_file(path: str) -> List[Tuple[str, str]]:
+    """Return (name, email) pairs from lines "Name,email"; comments and lines without a comma are ignored."""
+    users = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or ',' not in line:
+                continue
+            name, email = line.split(',', 1)
+            users.append((name.strip(), email.strip()))
+    return users
+
+
+class LiteLLM:
+    """The LiteLLM management calls kai-bootstrap needs, all with the master key."""
+
+    def __init__(self, url: str, master_key: str):
+        self.url = url
+        self.key = master_key
+
+    def user_exists(self, user_id: str) -> Tuple[Optional[bool], str]:
+        """True/False if the user is known or not, None with a reason if LiteLLM could not tell."""
+        status, resp = http_request(
+            f'{self.url}/user/info?user_id={urllib.parse.quote(user_id)}', bearer_token=self.key)
+        if status == 200 and isinstance(resp, dict):
+            info = resp.get('user_info')
+            return (bool(info) and info.get('user_id') == user_id, '')
+        if status in (400, 404):
+            return (False, '')
+        return (None, f'GET /user/info: status={status}')
+
+    def create_user(self, user_id: str, alias: str) -> Tuple[bool, str]:
+        status, _ = http_request(f'{self.url}/user/new', method='POST', bearer_token=self.key, data={
+            'user_id': user_id, 'user_email': user_id, 'user_alias': alias,
+            'user_role': 'internal_user', 'auto_create_key': False})
+        return (status == 200, f'POST /user/new: status={status}')
+
+    def key_alias_exists(self, alias: str) -> Tuple[Optional[bool], str]:
+        status, resp = http_request(
+            f'{self.url}/key/list?key_alias={urllib.parse.quote(alias)}', bearer_token=self.key)
+        if status == 200 and isinstance(resp, dict):
+            return (bool(resp.get('keys')), '')
+        return (None, f'GET /key/list: status={status}')
+
+    def generate_key(self, user_id: str, alias: str) -> Tuple[Optional[str], str]:
+        status, resp = http_request(f'{self.url}/key/generate', method='POST', bearer_token=self.key,
+                                    data={'user_id': user_id, 'key_alias': alias})
+        if status == 200 and isinstance(resp, dict) and resp.get('key'):
+            return (resp['key'], '')
+        return (None, f'POST /key/generate: status={status}')
+
+
+def litellm_client(args: argparse.Namespace) -> Optional[LiteLLM]:
+    master_key = read_env_file(args.env_file).get('LITELLM_MASTER_KEY', '')
+    return LiteLLM(args.litellm_url, master_key) if master_key else None
+
+
+def step_litellm_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 4a: a LiteLLM internal_user (user_id = e-mail) for the admin and every users-file line.
+
+    Existing users are left unchanged. Open WebUI's e-mail header (user_header_mappings) and
+    harness keys book on these users, so the e-mails must match Open WebUI's accounts.
+    """
+    if 'litellm-users' in args.skip:
+        return (True, 'skipped by user')
+    wanted = [('Admin', args.admin_email)]
+    if args.users_file:
+        try:
+            wanted += read_users_file(args.users_file)
+        except FileNotFoundError:
+            return (False, f'users file not found: {args.users_file}')
+    if args.dry_run:
+        print(f'[DRY] litellm-users: would create missing LiteLLM users among {len(wanted)}')
+        return (True, 'dry run')
+    client = litellm_client(args)
+    if not client:
+        return (False, 'LITELLM_MASTER_KEY not found in env file')
+    created = 0
+    for name, email in wanted:
+        exists, why = client.user_exists(email)
+        if exists is None:
+            return (False, f'{email}: {why}')
+        if exists:
+            continue
+        ok, why = client.create_user(email, name)
+        if not ok:
+            return (False, f'{email}: {why}')
+        created += 1
+    return (True, f'created {created} of {len(wanted)} users')
+
+
+def step_harness_keys(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """--harness-key: one LiteLLM key per person and harness, booked on the user's e-mail.
+
+    Unlike litellm-key, an existing alias is refused, never deleted: it may be in use.
+    """
+    if 'harness-key' in args.skip:
+        return (True, 'skipped by user')
+    specs = [spec.partition(':')[::2] for spec in args.harness_key]
+    if args.dry_run:
+        for email, alias in specs:
+            print(f'[DRY] harness-key: would create key {alias} for {email}')
+        return (True, 'dry run')
+    client = litellm_client(args)
+    if not client:
+        return (False, 'LITELLM_MASTER_KEY not found in env file')
+    for email, alias in specs:
+        exists, why = client.user_exists(email)
+        if not exists:
+            return (False, why or f'{email} is no LiteLLM user: run the step litellm-users first')
+        taken, why = client.key_alias_exists(alias)
+        if taken is None:
+            return (False, why)
+        if taken:
+            return (False, f'alias {alias} exists already; delete it in the LiteLLM UI if it is really unused')
+        key, why = client.generate_key(email, alias)
+        if not key:
+            return (False, f'{alias}: {why}')
+        state['new_keys'].append((alias, email, key))
+    return (True, f'created {len(specs)} keys')
+
+
 def step_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
     """Step 3: Create user accounts from users-file."""
     if 'users' in args.skip:
@@ -592,6 +728,7 @@ def main() -> None:
         'env_changed': False,
         'admin_token': None,
         'new_accounts': [],
+        'new_keys': [],
     }
     
     steps = [
@@ -599,11 +736,15 @@ def main() -> None:
         ('admin', step_admin),
         ('openai-connection', step_openai_connection),
         ('users', step_users),
+        ('litellm-users', step_litellm_users),
         ('brave-tool', step_brave_tool),
         ('status-filter', step_status_filter),
         ('signup-off', step_signup_off),
     ]
     
+    if args.harness_key:
+        steps = [('harness-key', step_harness_keys)]
+
     any_failed = False
     
     for step_name, step_func in steps:
@@ -648,6 +789,13 @@ def main() -> None:
               'put them in the team KeePass now and hand them out.')
         for email, password in state['new_accounts']:
             print(f'  {email}  {password}')
+        print()
+
+    if state['new_keys']:
+        print()
+        print('New LiteLLM keys, shown once and not stored anywhere: hand each one to its owner now.')
+        for alias, email, key in state['new_keys']:
+            print(f'  {alias}  {email}  {key}')
         print()
 
     if os.path.exists(LEGACY_SECRETS_FILE):

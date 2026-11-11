@@ -16,6 +16,9 @@ services:
       OPENAI_API_BASE_URL: http://litellm:4000/v1
       OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY}
       ENABLE_OLLAMA_API: "false"
+      # Sends X-OpenWebUI-User-Id/-Email/-Name/-Role to LiteLLM, which books the tokens on that user
+      # (user_header_mappings in litellm.yaml); the shared key open-webui stays the same.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
     # Der Filter "Kai-Status" fragt den Pfoertner auf dem Host (kai-pfoertner, Bridge-Adresse der Maschine).
     extra_hosts:
       - "kai-pfoertner:host-gateway"

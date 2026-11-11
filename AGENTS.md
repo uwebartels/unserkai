@@ -23,6 +23,7 @@ Gemeinsames Infrastruktur-Repo von Uwe, Axel, Nic und Martin: AWS-Grundlage mit 
 
 ## Stolperfallen
 
+- Die Nutzung je Person in LiteLLM stimmt nur, solange die E-Mails in Open WebUI und die `user_id` der LiteLLM-Nutzer übereinstimmen, also kommen beide aus derselben `--users-file` von `kai-bootstrap` und eine geänderte Mail muss an beiden Stellen geändert werden.
 - LiteLLM erreicht kai-gpu nur über den Pförtner (`api_base` auf `kai-pfoertner`, Namen aus `/etc/hosts` der Maschine, den die Rolle `kai_pfoertner` vor `kai_entry` schreibt); `kai_pfoertner_enabled: false` stellt direkten Zugriff wieder her und stoppt den Pförtner, `background_health_checks` in LiteLLM bleiben aus, sonst weckt jeder Prüfruf die GPU.
 - Alle Kai-Maschinen tragen Debian 13 (offizielles Debian-Image, Benutzer `admin`, Kernel `cloud-amd64`), also sprechen die Rollen nur `apt` wie im Heim-Setup: Docker CE aus Dockers Repo, auf `kai-gpu` Treiber und Container Toolkit aus NVIDIAs CUDA-Repo mit gepinntem Zweig (`nvidia-driver-pinning-*`), und die Runtime `nvidia` kommt über `docker_daemon_config` in die `daemon.json` der Rolle `docker`, nie per `nvidia-ctk`, damit die Datei genau einen Schreiber hat (Plan 2.8, 2.9).
 - Das Debian-Image hat kein `gpg`, also legen Rollen Repo-Schlüssel als `.asc` mit `signed-by` ab, nie per `gpg --dearmor` (Bestandsaufnahme §2).

@@ -34,3 +34,27 @@ ssh -N -L 3000:127.0.0.1:3000 \
 ```
 
 Ist Port 3000 auf dem eigenen Rechner belegt, `-L 3001:127.0.0.1:3000` und `http://localhost:3001`. Darf die eigene Rolle zusätzlich `AWS-StartPortForwardingSession`, geht es ohne SSH-Schlüssel mit `aws ssm start-session … --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["3000"],"localPortNumber":["3000"]}'`.
+
+## Harness-Zugang
+
+Werkzeuge, die LiteLLM direkt ansprechen (z. B. OpenClaw), bekommen je Person und Werkzeug einen eigenen virtuellen Key, der auf den LiteLLM-Nutzer dieser Person bucht (`user_id` = E-Mail, angelegt von `kai-bootstrap` im Schritt `litellm-users`). Auf `kai-entry` als root:
+
+```bash
+kai-bootstrap --harness-key MAIL@BEISPIEL:NAME-openclaw
+```
+
+Der Key erscheint genau einmal auf der Konsole und wird nirgends gespeichert; er geht direkt an die Person (bzw. in die Team-KeePass). Ein schon vorhandener Alias wird abgelehnt, nie ersetzt; einen alten Key löscht man bewusst in der LiteLLM-Admin-UI. Open-WebUI-„Direct Connections“ bleiben aus, weil dabei der Key im Browser läge.
+
+LiteLLM hört heute nur auf `127.0.0.1:4000` der Instanz. Wie Harnesses dorthin kommen, ist eine offene Entscheidung für Uwe ([04, Offene Punkte](04_plan.md)): ein zweiter Port in `kai-tunnel` (wie Open WebUI über SSM) oder eine Freigabe für das VPN-CIDR.
+
+## Auswertung
+
+Open WebUI schickt die E-Mail des angemeldeten Nutzers im Header `X-OpenWebUI-User-Email`, LiteLLM bucht die Anfrage damit auf denselben Nutzer wie die Harness-Keys. Preise sind nicht gesetzt, also zählen nur Tokens (Spend bleibt 0).
+
+- Admin-UI von LiteLLM (über den Tunnel auf Port 4000, Anmeldung mit dem Master-Key): Seite „Usage“, Filter nach Nutzer.
+- API: `curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" "http://127.0.0.1:4000/spend/logs?user_id=MAIL@BEISPIEL"`.
+- SQL, Tokens je Nutzer und Monat (`cd /opt/kai && docker compose exec litellm-db psql -U litellm litellm`):
+
+```sql
+SELECT "user", model, date_trunc('month', "startTime") AS monat, sum(prompt_tokens) AS prompt, sum(completion_tokens) AS completion FROM "LiteLLM_SpendLogs" GROUP BY 1, 2, 3 ORDER BY 3, 1, 2;
+```
