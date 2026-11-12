@@ -2,10 +2,10 @@
 - name: Unterstuetzte Distribution pruefen
   ansible.builtin.assert:
     that:
-      - ansible_facts['os_family'] == 'Debian'
-      - ansible_facts['distribution'] in ['Debian', 'Ubuntu']
+      - ansible_facts['distribution'] == 'Debian'
+      - docker_apt_arch is defined
     fail_msg: >-
-      Die Docker-Rolle unterstuetzt nur Debian und Ubuntu.
+      Die Docker-Rolle unterstuetzt nur Debian auf x86_64 oder aarch64.
       Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
     quiet: true
 
@@ -34,6 +34,7 @@
     owner: root
     group: root
     mode: "0644"
+  environment: "{{ docker_proxy_env }}"
 
 - name: Docker-apt-Repository einrichten
   ansible.builtin.apt_repository:
@@ -65,12 +66,71 @@
     mode: "0644"
   notify: Docker neu starten
 
+- name: Verzeichnis fuer das Docker-Drop-in anlegen
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Proxy fuer docker.service eintragen
+  ansible.builtin.copy:
+    content: |
+      [Service]
+      Environment="HTTP_PROXY={{ kai_http_proxy }}"
+      Environment="HTTPS_PROXY={{ kai_http_proxy }}"
+      Environment="NO_PROXY={{ kai_no_proxy }}"
+    dest: /etc/systemd/system/docker.service.d/http-proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: kai_http_proxy | default('') | length > 0
+  notify: Docker neu starten
+
+- name: Proxy fuer docker.service entfernen
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d/http-proxy.conf
+    state: absent
+  when: kai_http_proxy | default('') | length == 0
+  notify: Docker neu starten
+
+- name: Verzeichnis /opt/kai anlegen
+  ansible.builtin.file:
+    path: /opt/kai
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: kai_http_proxy | default('') | length > 0
+
+- name: Proxy-Umgebung fuer Container eintragen
+  ansible.builtin.copy:
+    content: |
+      HTTP_PROXY={{ kai_http_proxy }}
+      HTTPS_PROXY={{ kai_http_proxy }}
+      NO_PROXY={{ kai_no_proxy }},{{ kai_container_no_proxy }}
+    dest: /opt/kai/proxy.env
+    owner: root
+    group: root
+    mode: "0644"
+  when: kai_http_proxy | default('') | length > 0
+
+- name: Proxy-Umgebung fuer Container entfernen
+  ansible.builtin.file:
+    path: /opt/kai/proxy.env
+    state: absent
+  when: kai_http_proxy | default('') | length == 0
+
 - name: Docker-Dienst aktivieren und starten
   ansible.builtin.systemd:
     name: "{{ docker_service_name }}"
     state: "{{ docker_service_state }}"
     enabled: "{{ docker_service_enabled }}"
     daemon_reload: true
+
+- name: Docker mit Daemon- und Proxy-Konfiguration neu starten, falls noetig
+  ansible.builtin.meta: flush_handlers
 
 - name: Benutzer in die Docker-Gruppe aufnehmen
   ansible.builtin.user:
@@ -87,12 +147,14 @@
     cmd: docker --version
   register: docker_version
   changed_when: false
+  check_mode: false
 
 - name: Docker-Compose-Version ermitteln
   ansible.builtin.command:
     cmd: docker compose version
   register: docker_compose_version
   changed_when: false
+  check_mode: false
 
 - name: Installierte Docker-Version anzeigen
   ansible.builtin.debug:

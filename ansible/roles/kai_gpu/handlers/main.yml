@@ -1,0 +1,13 @@
+---
+# Ohne GPU (Test-VM mit kai_gpu_driver_install) bringt der Neustart nichts und wuerde den Test nur verlaengern.
+- name: Neustart nach neuem Treiber
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+  when: kai_gpu_enabled | bool
+
+- name: Llama-swap neu starten
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-directory {{ kai_gpu_install_dir }}
+      --env-file {{ kai_gpu_install_dir }}/stack.env restart llama-swap
+  changed_when: true

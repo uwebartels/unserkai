@@ -1,0 +1,267 @@
+---
+# Rolle kai_gpu: Treiber und llama.cpp-Stack ausrollen.
+
+- name: NVIDIA-Treiber einrichten
+  when: kai_gpu_driver_install | bool
+  block:
+    - name: Vorhandensein der Debian-Apt-Sources pruefen
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/debian.sources
+      register: kai_gpu_debian_sources_stat
+
+    - name: Komponente contrib aktivieren
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^Components: main$'
+        replace: 'Components: main contrib'
+      when: kai_gpu_debian_sources_stat.stat.exists
+
+    - name: CUDA-Paketschluessel herunterladen
+      ansible.builtin.get_url:
+        url: "https://developer.download.nvidia.com/compute/cuda/repos/\
+          debian13/x86_64/cuda-keyring_1.1-1_all.deb"
+        dest: /var/tmp/cuda-keyring_1.1-1_all.deb
+        mode: "0644"
+      environment: "{{ docker_proxy_env | default({}) }}"
+
+    - name: CUDA-Paketschluessel installieren
+      ansible.builtin.apt:
+        deb: /var/tmp/cuda-keyring_1.1-1_all.deb
+
+    # Ohne cache_valid_time: ein frischer Cache kennt das gerade eingetragene CUDA-Repo noch nicht.
+    - name: Apt-Cache aktualisieren
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Kernel-Header installieren
+      ansible.builtin.apt:
+        name: linux-headers-cloud-amd64
+        state: present
+
+    - name: Treiber-Pinning installieren
+      ansible.builtin.apt:
+        name: "nvidia-driver-pinning-{{ kai_gpu_driver_branch }}"
+        state: present
+
+    - name: NVIDIA-Treiber installieren
+      ansible.builtin.apt:
+        name:
+          - nvidia-driver-cuda
+          - nvidia-kernel-open-dkms
+        state: present
+      register: kai_gpu_driver
+      notify: Neustart nach neuem Treiber
+
+    - name: NVIDIA-Container-Toolkit installieren
+      ansible.builtin.apt:
+        name: nvidia-container-toolkit
+        state: present
+
+    - name: Handlers vor der GPU-Pruefung ausfuehren
+      ansible.builtin.meta: flush_handlers
+
+    - name: GPU-Anzeige pruefen
+      ansible.builtin.command:
+        cmd: nvidia-smi -L
+      register: kai_gpu_smi
+      changed_when: false
+      check_mode: false
+      when: kai_gpu_enabled | bool
+      failed_when: kai_gpu_smi.rc != 0
+      retries: 5
+      delay: 10
+      until: kai_gpu_smi.rc == 0
+
+- name: Verzeichnisse anlegen
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ kai_gpu_install_dir }}"
+    - "{{ kai_gpu_models_dir }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Compose-Datei kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_src_dir }}/compose.yaml"
+    dest: "{{ kai_gpu_install_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: CPU-Compose-Datei kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_src_dir }}/compose.cpu.yaml"
+    dest: "{{ kai_gpu_install_dir }}/compose.cpu.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not (kai_gpu_enabled | bool)
+
+- name: CPU-Compose-Datei entfernen
+  ansible.builtin.file:
+    path: "{{ kai_gpu_install_dir }}/compose.cpu.yaml"
+    state: absent
+  when: kai_gpu_enabled | bool
+
+- name: Llama-swap-Konfiguration erzeugen
+  ansible.builtin.template:
+    src: "{{ kai_gpu_src_dir }}/llama-swap.yaml.j2"
+    dest: "{{ kai_gpu_install_dir }}/llama-swap.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Llama-swap neu starten
+
+- name: Umgebungsdatei stack.env erzeugen
+  ansible.builtin.copy:
+    content: |
+      KAI_GPU_BIND={{ kai_gpu_bind }}
+      KAI_GPU_PORT={{ kai_gpu_port }}
+      KAI_MODELS_DIR={{ kai_gpu_models_dir }}
+    dest: "{{ kai_gpu_install_dir }}/stack.env"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Die .env mit LLAMA_SWAP_KEY legt ein Mensch an (kai/compose/gpu/.env.example); Muster wie in der Rolle kai_entry.
+- name: Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_stat
+
+- name: Vorlage der Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_env_seed }}"
+  register: kai_gpu_env_seed_stat
+  when:
+    - kai_gpu_env_seed | length > 0
+    - not kai_gpu_env_stat.stat.exists
+
+- name: Umgebungsdatei aus der Vorlage anlegen
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_env_seed }}"
+    dest: "{{ kai_gpu_install_dir }}/.env"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - kai_gpu_env_seed_stat.stat is defined
+    - kai_gpu_env_seed_stat.stat.exists
+
+- name: Umgebungsdatei erneut pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_stat
+
+- name: Umgebungsdatei vorhanden und geschuetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_gpu_env_stat.stat.exists
+      - kai_gpu_env_stat.stat.mode == '0600'
+    fail_msg: >-
+      Die Datei {{ kai_gpu_install_dir }}/.env fehlt oder hat nicht den Modus 0600.
+      Bitte aus kai/compose/gpu/.env.example kopieren, LLAMA_SWAP_KEY eintragen
+      (derselbe Wert wie auf kai-entry), Modus 0600 setzen und die Rolle erneut ausfuehren.
+    quiet: true
+
+- name: Key fuer llama-swap aus der Umgebungsdatei lesen
+  ansible.builtin.slurp:
+    src: "{{ kai_gpu_install_dir }}/.env"
+  register: kai_gpu_env_raw
+  no_log: true
+
+- name: Key fuer llama-swap festhalten
+  ansible.builtin.set_fact:
+    kai_gpu_api_key: "{{ (kai_gpu_env_raw.content | b64decode | regex_search('(?m)^LLAMA_SWAP_KEY=(.*)$', '\\1') or ['']) | first | trim }}"
+  no_log: true
+
+- name: Key fuer llama-swap gesetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_gpu_api_key | length > 0
+    fail_msg: "LLAMA_SWAP_KEY in {{ kai_gpu_install_dir }}/.env ist leer."
+    quiet: true
+
+- name: Modell-Skript installieren
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_models_pull_src }}"
+    dest: /usr/local/bin/kai-models-pull
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Modell-Liste kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_gpu_models_list_src }}"
+    dest: "{{ kai_gpu_install_dir }}/models.list"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Modelle herunterladen
+  ansible.builtin.command:
+    cmd: >-
+      kai-models-pull --dir "{{ kai_gpu_models_dir }}"
+      --list "{{ kai_gpu_install_dir }}/models.list"
+      {{ kai_gpu_models | map(attribute='file') | join(' ') }}
+  register: kai_gpu_pull
+  changed_when: "'pulled:' in kai_gpu_pull.stdout"
+  environment: "{{ docker_proxy_env | default({}) }}"
+
+- name: Platz fuer fehlende Images pruefen
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: compose_space
+  vars:
+    docker_compose_args: "{{ kai_gpu_compose_args }}"
+    docker_min_free_gb: "{{ kai_gpu_min_free_gb }}"
+
+- name: Stack starten
+  ansible.builtin.command:
+    cmd: >-
+      docker compose {{ kai_gpu_compose_args }}
+      up -d --wait --wait-timeout {{ kai_gpu_wait_timeout }}
+      --quiet-pull
+  register: kai_gpu_up
+  changed_when: >-
+    'Started' in kai_gpu_up.stderr or
+    'Recreated' in kai_gpu_up.stderr or
+    'Created' in kai_gpu_up.stderr
+
+- name: Alte Images entfernen
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: compose_prune
+  when: kai_gpu_up is changed
+
+- name: Modellkatalog abfragen
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ kai_gpu_port }}/v1/models"
+    headers:
+      Authorization: "Bearer {{ kai_gpu_api_key }}"
+    return_content: true
+  register: kai_gpu_models_response
+  no_log: true
+  check_mode: false
+  retries: 12
+  delay: 5
+  until: kai_gpu_models_response.status == 200
+
+- name: Alle Modelle im Katalog pruefen
+  ansible.builtin.assert:
+    that:
+      - item in kai_gpu_models_response.json.data | map(attribute='id') | list
+    fail_msg: >-
+      Modell {{ item }} fehlt im Antwortkatalog von llama-swap.
+    quiet: true
+  loop: "{{ kai_gpu_models | map(attribute='name') | list }}"
+  loop_control:
+    label: "{{ item }}"

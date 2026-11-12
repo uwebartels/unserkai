@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# kai-tunnel: open Open WebUI on kai-entry through an SSH tunnel over AWS SSM.
+# Usage: kai-tunnel [options]
+# Options:
+#   --profile NAME      AWS profile (default: env KAI_AWS_PROFILE; required).
+#   --instance-id ID    EC2 instance ID of kai-entry (default: env KAI_ENTRY_INSTANCE_ID, else i-0f6dc684ea90b09cf = webui1).
+#   --user NAME         SSH user on kai-entry (default: env KAI_SSH_USER, else $USER).
+#   --identity FILE     SSH private key (default: ssh's own choice).
+#   --region REGION     AWS region (default: eu-central-1).
+#   --local-port PORT   Local port (default: first free port from 3000 to 3010).
+#   --remote-port PORT  Port of Open WebUI on kai-entry (default: 3000).
+#   --dry-run           Print the commands to stderr instead of running them.
+#   -h|--help           Print this usage and exit 0.
+# Stop the tunnel with Ctrl+C.
+set -euo pipefail
+
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+# Unset AWS_PROFILE so a direnv profile can never leak in.
+unset AWS_PROFILE
+
+instance_id=${KAI_ENTRY_INSTANCE_ID:-i-0f6dc684ea90b09cf}
+profile=${KAI_AWS_PROFILE:-}
+user=${KAI_SSH_USER:-${USER:-}}
+identity=
+region=eu-central-1
+local_port=
+remote_port=3000
+dry_run=0
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --profile requires an argument\n' >&2
+        exit 2
+      fi
+      profile=$2
+      shift 2
+      ;;
+    --instance-id)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --instance-id requires an argument\n' >&2
+        exit 2
+      fi
+      instance_id=$2
+      shift 2
+      ;;
+    --user)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --user requires an argument\n' >&2
+        exit 2
+      fi
+      user=$2
+      shift 2
+      ;;
+    --identity)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --identity requires an argument\n' >&2
+        exit 2
+      fi
+      identity=$2
+      shift 2
+      ;;
+    --region)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --region requires an argument\n' >&2
+        exit 2
+      fi
+      region=$2
+      shift 2
+      ;;
+    --local-port)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --local-port requires an argument\n' >&2
+        exit 2
+      fi
+      local_port=$2
+      shift 2
+      ;;
+    --remote-port)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --remote-port requires an argument\n' >&2
+        exit 2
+      fi
+      remote_port=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      printf 'error: unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      printf 'error: unexpected argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+# Validate profile
+if [[ -z $profile ]]; then
+  printf 'error: --profile is required (or set KAI_AWS_PROFILE)\n' >&2
+  exit 2
+fi
+
+validate_port() {
+  local port=$1
+  if [[ ! $port =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    printf 'error: invalid port: %s\n' "$port" >&2
+    exit 2
+  fi
+}
+
+# Validate ports
+validate_port "$remote_port"
+if [[ -n $local_port ]]; then
+  validate_port "$local_port"
+fi
+
+# Check required tools unless this is a dry run
+if [[ $dry_run -eq 0 ]]; then
+  for tool in aws session-manager-plugin ssh; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      printf 'error: %s is not on PATH\n' "$tool" >&2
+      exit 1
+    fi
+  done
+fi
+
+# Check whether a local TCP port is already in use
+port_in_use() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+# Pick or validate the local port
+if [[ -z $local_port ]]; then
+  for candidate in {3000..3010}; do
+    if ! port_in_use "$candidate"; then
+      local_port=$candidate
+      break
+    fi
+  done
+
+  if [[ -z $local_port ]]; then
+    printf 'error: no free local port from 3000 to 3010\n' >&2
+    exit 1
+  fi
+else
+  if port_in_use "$local_port"; then
+    printf 'error: local port %s is in use; pick another with --local-port\n' "$local_port" >&2
+    exit 1
+  fi
+fi
+
+# Print a command in dry-run style
+print_cmd() {
+  printf '+ ' >&2
+  printf '%q ' "$@" >&2
+  printf '\n' >&2
+}
+
+if [[ -z $user ]]; then
+  printf 'error: --user is required (or set KAI_SSH_USER)\n' >&2
+  exit 2
+fi
+
+proxy_command=$(printf 'aws ssm start-session --profile %q --region %q --target %%h --document-name AWS-StartSSHSession --parameters portNumber=%%p' "$profile" "$region")
+ssh_args=(-N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L "${local_port}:127.0.0.1:${remote_port}")
+if [[ -n $identity ]]; then
+  ssh_args+=(-i "$identity")
+fi
+ssh_args+=(-o "ProxyCommand=$proxy_command" "${user}@${instance_id}")
+
+if [[ $dry_run -eq 1 ]]; then
+  print_cmd aws sts get-caller-identity --profile "$profile" --query Arn --output text
+  print_cmd ssh "${ssh_args[@]}"
+  exit 0
+fi
+
+# Step 1: check the AWS session first, so the MFA prompt and the SSH key passphrase never ask at the same time.
+printf 'kai-tunnel: checking AWS session for profile %s (may ask for MFA)\n' "$profile" >&2
+if ! aws sts get-caller-identity --profile "$profile" --query Arn --output text >/dev/null; then
+  printf 'error: AWS session for profile %s failed; log in again (aws sso login or MFA) and retry\n' "$profile" >&2
+  exit 1
+fi
+
+# Step 2: the SSH tunnel through AWS SSM.
+printf 'kai-tunnel: open http://localhost:%s in a browser on THIS computer; stop with Ctrl+C\n' "$local_port" >&2
+exec ssh "${ssh_args[@]}"

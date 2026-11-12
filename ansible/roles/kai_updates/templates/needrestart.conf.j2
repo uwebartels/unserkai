@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# Restarts automatically only inside apt-daily-upgrade.service (NEEDRESTART_MODE=a); manual apt and Ansible only list.
+$nrconf{restart} = 'l';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehints} = 0;
+{% for unit in kai_updates_restart_skip %}
+$nrconf{override_rc}->{qr(^{{ unit | regex_escape }}\.service$)} = 0;
+{% endfor %}

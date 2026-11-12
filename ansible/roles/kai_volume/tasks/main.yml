@@ -1,0 +1,132 @@
+---
+- name: Eingaben pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_volume_label | length > 0
+      - kai_volume_mountpoint | length > 0
+    quiet: true
+
+- name: Dateisystem-Werkzeuge installieren
+  ansible.builtin.apt:
+    name: xfsprogs
+    state: present
+
+- name: Dateisystem mit dem Label suchen
+  ansible.builtin.command:
+    cmd: blkid -L {{ kai_volume_label }}
+  register: kai_volume_found
+  changed_when: false
+  check_mode: false
+  failed_when: kai_volume_found.rc not in [0, 2]
+
+- name: Eigenschaften des gefundenen Dateisystems lesen
+  ansible.builtin.command:
+    cmd: blkid -o export {{ kai_volume_found.stdout }}
+  register: kai_volume_info
+  changed_when: false
+  check_mode: false
+  when: kai_volume_found.rc == 0
+
+- name: Dateisystemtyp des gefundenen Labels verlangen
+  ansible.builtin.assert:
+    that: kai_volume_props.TYPE | default('') == kai_volume_fstype
+    fail_msg: >-
+      Das Dateisystem mit dem Label {{ kai_volume_label }} ({{ kai_volume_found.stdout }})
+      hat den Typ {{ kai_volume_props.TYPE | default('unbekannt') }}, verlangt ist {{ kai_volume_fstype }};
+      die Rolle formatiert nie um.
+    quiet: true
+  vars:
+    kai_volume_props: "{{ dict(kai_volume_info.stdout_lines | select('search', '=') | map('split', '=', 1) | list) }}"
+  when: kai_volume_found.rc == 0
+
+- name: Fstab lesen
+  ansible.builtin.slurp:
+    src: /etc/fstab
+  register: kai_volume_fstab
+  when: kai_volume_found.rc == 0
+
+- name: Doppelte Einhaengepunkte desselben Geraets suchen
+  ansible.builtin.set_fact:
+    kai_volume_duplicates: >-
+      {% set p = dict(kai_volume_info.stdout_lines | select('search', '=') | map('split', '=', 1) | list) %}
+      {% set ids = [kai_volume_found.stdout] + (['UUID=' ~ p.UUID] if 'UUID' in p else [])
+         + (['PARTUUID=' ~ p.PARTUUID] if 'PARTUUID' in p else []) + ['LABEL=' ~ kai_volume_label] %}
+      {% set r = [] %}
+      {% for l in (kai_volume_fstab.content | b64decode).splitlines() %}
+      {% set f = l.split() %}
+      {% if f | length >= 2 and not l.strip().startswith('#') and f[0] in ids and f[1] != kai_volume_mountpoint %}
+      {% set _ = r.append(f[1]) %}
+      {% endif %}
+      {% endfor %}
+      {{ r | to_json }}
+  when: kai_volume_found.rc == 0
+
+- name: Doppelte Einhaengung aus fstab entfernen und aushaengen
+  ansible.posix.mount:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ kai_volume_duplicates | default('[]') | from_json }}"
+  when: kai_volume_found.rc == 0
+
+- name: Datenplatte benannt verlangen
+  ansible.builtin.assert:
+    that: kai_volume_device | length > 0
+    fail_msg: >-
+      kai_volume_device fehlt (Pfad unter /dev/disk/by-id in den host_vars);
+      ohne Dateisystem mit dem Label {{ kai_volume_label }} wird keine Platte erraten.
+    quiet: true
+  when: kai_volume_found.rc != 0 and kai_volume_required | bool
+
+- name: Datenplatte aufloesen
+  ansible.builtin.command:
+    cmd: realpath --canonicalize-existing {{ kai_volume_device }}
+  register: kai_volume_real
+  changed_when: false
+  check_mode: false
+  when: kai_volume_found.rc != 0 and kai_volume_required | bool
+
+- name: Datenplatte untersuchen
+  ansible.builtin.command:
+    cmd: lsblk --json --paths --output NAME,TYPE,FSTYPE {{ kai_volume_real.stdout }}
+  register: kai_volume_lsblk
+  changed_when: false
+  check_mode: false
+  when: kai_volume_found.rc != 0 and kai_volume_required | bool
+
+- name: Leere Platte verlangen
+  ansible.builtin.assert:
+    that:
+      - kai_volume_disk.type == 'disk'
+      - kai_volume_disk.fstype is none
+      - kai_volume_disk.children is not defined
+    fail_msg: >-
+      {{ kai_volume_device }} ({{ kai_volume_disk.name }}) ist keine leere Platte
+      (Typ {{ kai_volume_disk.type }}, Dateisystem {{ kai_volume_disk.fstype }}).
+    quiet: true
+  vars:
+    kai_volume_disk: "{{ (kai_volume_lsblk.stdout | from_json).blockdevices | first }}"
+  when: kai_volume_found.rc != 0 and kai_volume_required | bool
+
+- name: Dateisystem mit dem Label anlegen
+  ansible.builtin.command:
+    cmd: mkfs.{{ kai_volume_fstype }} -L {{ kai_volume_label }} {{ kai_volume_real.stdout }}
+  changed_when: true
+  when: kai_volume_found.rc != 0 and kai_volume_required | bool
+
+- name: Volume per Label einbinden
+  ansible.posix.mount:
+    path: "{{ kai_volume_mountpoint }}"
+    src: "LABEL={{ kai_volume_label }}"
+    fstype: "{{ kai_volume_fstype }}"
+    opts: defaults,nofail
+    state: mounted
+  when: kai_volume_found.rc == 0 or kai_volume_required | bool
+
+- name: Einhaengepunkt als Verzeichnis sicherstellen (ohne Volume)
+  ansible.builtin.file:
+    path: "{{ kai_volume_mountpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: kai_volume_found.rc != 0 and not kai_volume_required | bool

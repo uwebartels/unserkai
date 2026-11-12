@@ -1,0 +1,19 @@
+---
+# Installationsverzeichnis auf der Maschine (Mountpunkt des Volumes kai-data).
+kai_entry_install_dir: /opt/kai
+# Verzeichnis mit compose.yaml und litellm.yaml.j2 im Repo.
+kai_entry_src_dir: "{{ playbook_dir }}/../../kai/compose/entry"
+# Bind-Adressen und Ports (kai_webui_bind, kai_litellm_bind, kai_webui_port, kai_litellm_port)
+# stehen in group_vars/kai_entry.yml.
+# Sekunden, die 'docker compose up --wait' auf gesunde Dienste wartet.
+kai_entry_wait_timeout: 300
+# Optional: fertige .env, die ein Mensch vorab auf der Maschine ablegt (root, 0600); leer = .env muss schon in
+# kai_entry_install_dir liegen. Die Rolle kopiert sie nur, wenn dort keine .env existiert.
+kai_entry_env_seed: ""
+# Gemeinsame Argumente fuer jeden 'docker compose'-Aufruf der Rolle.
+kai_entry_compose_args: >-
+  --project-directory {{ kai_entry_install_dir }}
+  --env-file {{ kai_entry_install_dir }}/.env
+  --env-file {{ kai_entry_install_dir }}/stack.env
+# Freier Platz in GB unter /var/lib/docker, bevor ein fehlendes Image geladen wird (Images zusammen etwa 10 GB).
+kai_entry_min_free_gb: 8

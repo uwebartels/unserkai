@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  role_name: kai_volume
+  author: unserkai
+  description: Bindet ein Datenvolume per Dateisystem-Label ein und legt bei Bedarf das Dateisystem an
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - storage
+dependencies: []

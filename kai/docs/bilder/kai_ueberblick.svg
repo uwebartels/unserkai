@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 880" width="1200" height="880" font-family="Inter, Arial, sans-serif">
+  <title>Kai im Überblick: zwei Maschinen in Frankfurt</title>
+  <rect width="1200" height="880" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="600" y="40" font-size="28" font-weight="bold" fill="#1a1a1a" text-anchor="middle">Kai im Überblick: zwei Maschinen in Amazons Rechenzentrum Frankfurt</text>
+
+  <!-- Users -->
+  <g transform="translate(560, 70)">
+    <circle cx="10" cy="10" r="7" fill="#2563eb"/>
+    <path d="M0,30 Q10,20 20,30 L20,38 L0,38 Z" fill="#2563eb"/>
+    <circle cx="30" cy="10" r="7" fill="#2563eb"/>
+    <path d="M20,30 Q30,20 40,30 L40,38 L20,38 Z" fill="#2563eb"/>
+    <circle cx="50" cy="10" r="7" fill="#2563eb"/>
+    <path d="M40,30 Q50,20 60,30 L60,38 L40,38 Z" fill="#2563eb"/>
+    <circle cx="70" cy="10" r="7" fill="#2563eb"/>
+    <path d="M60,30 Q70,20 80,30 L80,38 L60,38 Z" fill="#2563eb"/>
+  </g>
+  <text x="600" y="130" font-size="16" fill="#2563eb" text-anchor="middle">Uwe, Axel, Nic, Martin</text>
+  <text x="600" y="150" font-size="14" fill="#6b7280" text-anchor="middle">PC und Telefon</text>
+  <line x1="600" y1="160" x2="600" y2="240" stroke="#2563eb" stroke-width="2"/>
+  <polygon points="600,250 595,240 605,240" fill="#2563eb"/>
+  <text x="612" y="182" font-size="14" fill="#6b7280">gesicherter Zugang (VPN)</text>
+
+  <!-- Programs (later) -->
+  <rect x="820" y="90" width="240" height="60" rx="10" ry="10" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="940" y="114" font-size="16" fill="#374151" text-anchor="middle">Programme wie OpenCode</text>
+  <text x="940" y="136" font-size="14" fill="#6b7280" text-anchor="middle">(später, eigener Zugang)</text>
+  <line x1="940" y1="150" x2="940" y2="240" stroke="#2563eb" stroke-width="2" stroke-dasharray="6,4"/>
+  <polygon points="940,250 935,240 945,240" fill="#2563eb"/>
+
+  <!-- kai-entry -->
+  <rect x="80" y="200" width="1040" height="260" rx="16" ry="16" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+  <text x="100" y="228" font-size="18" font-weight="bold" fill="#065f46">Kleine Maschine „kai-entry“ · läuft immer · günstig</text>
+
+  <!-- Row 1: Websuche | Chat | Verteiler -->
+  <rect x="110" y="250" width="300" height="90" rx="10" ry="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="260" y="278" font-size="18" fill="#92400e" text-anchor="middle">Websuche-Werkzeug (Brave MCP)</text>
+  <text x="260" y="302" font-size="14" fill="#374151" text-anchor="middle">nur die Suchanfrage geht nach draußen,</text>
+  <text x="260" y="322" font-size="14" fill="#374151" text-anchor="middle">kein Konto, kein Chat-Verlauf</text>
+
+  <rect x="450" y="250" width="300" height="90" rx="10" ry="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="600" y="278" font-size="18" fill="#1e40af" text-anchor="middle">Chat-Oberfläche (Open WebUI)</text>
+  <text x="600" y="302" font-size="14" fill="#374151" text-anchor="middle">Konten, Chat-Verlauf,</text>
+  <text x="600" y="322" font-size="14" fill="#374151" text-anchor="middle">hochgeladene Dokumente</text>
+
+  <rect x="790" y="250" width="300" height="90" rx="10" ry="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="940" y="278" font-size="18" fill="#5b21b6" text-anchor="middle">Verteiler (LiteLLM)</text>
+  <text x="940" y="302" font-size="14" fill="#374151" text-anchor="middle">ein Anschluss für alle Modelle,</text>
+  <text x="940" y="322" font-size="14" fill="#374151" text-anchor="middle">leitet weiter, zählt Verbrauch</text>
+
+  <line x1="448" y1="295" x2="420" y2="295" stroke="#d97706" stroke-width="2"/>
+  <polygon points="410,295 420,290 420,300" fill="#d97706"/>
+  <line x1="752" y1="295" x2="780" y2="295" stroke="#2563eb" stroke-width="2"/>
+  <polygon points="790,295 780,290 780,300" fill="#2563eb"/>
+
+  <!-- Row 2: Platte under Chat -->
+  <line x1="600" y1="340" x2="600" y2="352" stroke="#6b7280" stroke-width="2"/>
+  <polygon points="600,360 595,352 605,352" fill="#6b7280"/>
+  <rect x="450" y="360" width="300" height="80" rx="10" ry="10" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="600" y="386" font-size="16" fill="#374151" text-anchor="middle">Platte (bleibt bei jedem Umbau)</text>
+  <text x="600" y="406" font-size="14" fill="#6b7280" text-anchor="middle">Konten, Chats, Dokumente, Zugangsdaten</text>
+  <text x="600" y="426" font-size="14" fill="#6b7280" text-anchor="middle">Sicherung per Snapshot</text>
+
+  <!-- Tool call leaves the machine -->
+  <line x1="260" y1="340" x2="260" y2="480" stroke="#d97706" stroke-width="2"/>
+  <polygon points="260,490 255,480 265,480" fill="#d97706"/>
+  <text x="272" y="420" font-size="14" fill="#6b7280">Werkzeug-Aufruf</text>
+  <rect x="110" y="490" width="300" height="56" rx="10" ry="10" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="260" y="524" font-size="16" fill="#374151" text-anchor="middle">Brave Suche (extern)</text>
+
+  <!-- Verteiler to kai-gpu -->
+  <line x1="940" y1="340" x2="940" y2="580" stroke="#2563eb" stroke-width="2"/>
+  <polygon points="940,590 935,580 945,580" fill="#2563eb"/>
+  <text x="952" y="520" font-size="14" fill="#6b7280">Frage / Antwort,</text>
+  <text x="952" y="538" font-size="14" fill="#6b7280">nur im internen Netz</text>
+
+  <!-- kai-gpu -->
+  <rect x="560" y="590" width="560" height="220" rx="16" ry="16" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+  <text x="580" y="618" font-size="18" font-weight="bold" fill="#065f46">Grafikkarten-Maschine „kai-gpu“ · an/aus bei Bedarf</text>
+
+  <rect x="860" y="640" width="240" height="80" rx="10" ry="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="980" y="666" font-size="16" fill="#1e40af" text-anchor="middle">Modell-Weiche (llama-swap)</text>
+  <text x="980" y="688" font-size="14" fill="#374151" text-anchor="middle">lädt das gewünschte Modell</text>
+  <text x="980" y="706" font-size="14" fill="#374151" text-anchor="middle">auf die Grafikkarte</text>
+
+  <line x1="858" y1="680" x2="842" y2="680" stroke="#2563eb" stroke-width="2"/>
+  <polygon points="832,680 842,675 842,685" fill="#2563eb"/>
+
+  <rect x="590" y="640" width="240" height="80" rx="10" ry="10" fill="#f0fdf4" stroke="#059669" stroke-width="1.5"/>
+  <text x="710" y="666" font-size="16" fill="#065f46" text-anchor="middle">Sprachmodell (llama.cpp)</text>
+  <text x="710" y="688" font-size="14" fill="#374151" text-anchor="middle">gpt-oss-20b auf der Grafikkarte,</text>
+  <text x="710" y="706" font-size="14" fill="#374151" text-anchor="middle">rechnet, speichert nichts</text>
+
+  <rect x="590" y="735" width="510" height="60" rx="10" ry="10" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="845" y="760" font-size="16" fill="#374151" text-anchor="middle">Platte: Modelldateien (wiederbeschaffbar)</text>
+  <text x="845" y="780" font-size="14" fill="#6b7280" text-anchor="middle">wandert beim Umbau mit zur nächsten Maschine</text>
+
+  <!-- Later -->
+  <rect x="80" y="590" width="440" height="220" rx="16" ry="16" fill="#ffffff" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <text x="100" y="618" font-size="16" font-weight="bold" fill="#374151">Später am Verteiler, ohne Änderung für Nutzer</text>
+  <text x="100" y="652" font-size="14" fill="#374151">• eine größere Grafikkarten-Maschine</text>
+  <text x="100" y="678" font-size="14" fill="#374151">• Rechner zu Hause (über einen Tunnel)</text>
+  <text x="100" y="704" font-size="14" fill="#374151">• externe KI-Dienste, nur mit Schutz der Daten</text>
+  <text x="100" y="730" font-size="14" fill="#374151">• Programme, die den Verteiler direkt ansprechen</text>
+  <text x="100" y="756" font-size="14" fill="#374151">• automatisches Ein- und Ausschalten der GPU-Maschine</text>
+  <text x="100" y="790" font-size="14" fill="#6b7280">Jede Maschine ist austauschbar: nur die Platten bleiben.</text>
+
+  <!-- Legend -->
+  <line x1="80" y1="840" x2="116" y2="840" stroke="#2563eb" stroke-width="2"/>
+  <polygon points="124,840 116,836 116,844" fill="#2563eb"/>
+  <text x="130" y="845" font-size="14" fill="#374151">Frage / Antwort</text>
+  <line x1="280" y1="840" x2="316" y2="840" stroke="#d97706" stroke-width="2"/>
+  <polygon points="324,840 316,836 316,844" fill="#d97706"/>
+  <text x="330" y="845" font-size="14" fill="#374151">Werkzeug-Aufruf</text>
+  <rect x="480" y="832" width="40" height="16" rx="4" ry="4" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="530" y="845" font-size="14" fill="#374151">Daten bleiben hier</text>
+  <text x="1120" y="845" font-size="14" fill="#6b7280" text-anchor="end">Zugriff auf die Platten hat nur, wer die Maschinen verwaltet (Uwe, Axel)</text>
+</svg>

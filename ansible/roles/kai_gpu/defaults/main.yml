@@ -1,0 +1,32 @@
+---
+# Installationsverzeichnis auf der Maschine; die Modelle liegen darunter in models/.
+kai_gpu_install_dir: /opt/kai
+kai_gpu_models_dir: "{{ kai_gpu_install_dir }}/models"
+# Verzeichnis mit compose.yaml, compose.cpu.yaml und llama-swap.yaml.j2 im Repo.
+kai_gpu_src_dir: "{{ playbook_dir }}/../../kai/compose/gpu"
+# Skript und Liste fuer den Modell-Download (Plan 2.6).
+kai_gpu_models_pull_src: "{{ playbook_dir }}/../../kai/bin/kai-models-pull"
+kai_gpu_models_list_src: "{{ playbook_dir }}/../../kai/models.list"
+# Mit false laeuft alles ohne GPU: keine GPU-Reservierung, keine Runtime nvidia, keine GPU-Pruefung.
+kai_gpu_enabled: true
+# Treiber, Pinning und Container Toolkit installieren; die Test-VM setzt es ohne GPU auf true,
+# damit CUDA-Repo, Apt-Cache und DKMS-Build vor AWS geprueft sind.
+kai_gpu_driver_install: "{{ kai_gpu_enabled }}"
+# Treiberzweig von NVIDIA (Long Term Support Branch).
+kai_gpu_driver_branch: "620"
+kai_gpu_bind: "127.0.0.1"
+kai_gpu_port: 8080
+# Optional: fertige .env (LLAMA_SWAP_KEY), die ein Mensch vorab auf der Maschine ablegt (root, 0600); leer = .env
+# muss schon in kai_gpu_install_dir liegen. Die Rolle kopiert sie nur, wenn dort keine .env existiert.
+kai_gpu_env_seed: ""
+# Sekunden, die 'docker compose up --wait' auf gesunde Dienste wartet.
+kai_gpu_wait_timeout: 300
+# Gemeinsame Argumente fuer 'docker compose'; ohne GPU kommt compose.cpu.yaml dazu.
+kai_gpu_compose_args: >-
+  --project-directory {{ kai_gpu_install_dir }}
+  --env-file {{ kai_gpu_install_dir }}/stack.env
+  -f {{ kai_gpu_install_dir }}/compose.yaml
+  {{ '' if kai_gpu_enabled | bool else '-f ' ~ kai_gpu_install_dir ~ '/compose.cpu.yaml' }}
+# Freier Platz in GB unter /var/lib/docker, bevor ein fehlendes Image geladen wird;
+# das CUDA-Image braucht beim Laden und Entpacken etwa 20 GB, das CPU-Image der Test-VM wenig.
+kai_gpu_min_free_gb: "{{ 20 if kai_gpu_enabled | bool else 3 }}"

@@ -1,0 +1,598 @@
+#!/usr/bin/env bash
+# kai-smoke: post-deployment smoke test for the Kai stacks.
+# Run ON the machine: --target entry on kai-entry (webui1), --target gpu on kai-gpu (kai1).
+# Options:
+#   --target entry|gpu    Stack target: entry or gpu (default entry)
+#   --webui-url URL       Open WebUI base URL (default http://127.0.0.1:3000)
+#   --litellm-url URL     LiteLLM base URL (default http://127.0.0.1:4000)
+#   --gpu-url URL         Direct GPU model server base URL (default empty for entry,
+#                         http://127.0.0.1:8080 for gpu)
+#   --env-file FILE       Env file to read LITELLM_MASTER_KEY and LLAMA_SWAP_KEY from (default /opt/kai/.env)
+#   --compose-dir DIR     Compose project directory (default /opt/kai)
+#   --model ID            Model id for the chat call (default: first id from /v1/models)
+#   --timeout SECONDS     curl --max-time for the chat call (default 180)
+#   --min-free-gb N       Minimum free GB for / and the compose directory (default 5)
+#   --no-chat             Skip the chat completion check
+#   --user-email EMAIL    Open WebUI user whose LiteLLM user (user_id = e-mail) the entry checks use
+#                         (default env KAI_SMOKE_USER); without it litellm-user and usage-per-user are skipped
+#   -h|--help             Print this usage and exit 0
+set -euo pipefail
+
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+failures=0
+
+pass() {
+  printf '[PASS] %s\n' "$1"
+}
+
+fail() {
+  printf '[FAIL] %s: %s\n' "$1" "$2"
+  failures=$((failures + 1))
+}
+
+skip() {
+  printf '[SKIP] %s: %s\n' "$1" "$2"
+}
+
+file_exists() {
+  if [[ -e "$1" ]]; then
+    return 0
+  fi
+  if [[ $EUID -ne 0 ]] && sudo -n test -e "$1" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+target=entry
+webui_url=http://127.0.0.1:3000
+litellm_url=http://127.0.0.1:4000
+gpu_url=
+gpu_url_given=0
+env_file=/opt/kai/.env
+compose_dir=/opt/kai
+model=
+timeout=180
+min_free_gb=5
+no_chat=0
+user_email=${KAI_SMOKE_USER:-}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      target=$2
+      if [[ "$target" != entry && "$target" != gpu ]]; then
+        printf 'error: invalid --target: %s\n' "$2" >&2
+        usage >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --webui-url)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      webui_url=$2
+      shift 2
+      ;;
+    --litellm-url)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      litellm_url=$2
+      shift 2
+      ;;
+    --gpu-url)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      gpu_url=$2
+      gpu_url_given=1
+      shift 2
+      ;;
+    --env-file)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      env_file=$2
+      shift 2
+      ;;
+    --compose-dir)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      compose_dir=$2
+      shift 2
+      ;;
+    --model)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      model=$2
+      shift 2
+      ;;
+    --timeout)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      timeout=$2
+      shift 2
+      ;;
+    --min-free-gb)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      min_free_gb=$2
+      if [[ ! "$min_free_gb" =~ ^[0-9]+$ ]]; then
+        printf 'error: invalid --min-free-gb: %s\n' "$2" >&2
+        usage >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --no-chat)
+      no_chat=1
+      shift
+      ;;
+    --user-email)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: missing argument for %s\n' "$1" >&2
+        usage >&2
+        exit 2
+      fi
+      user_email=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'error: unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ $target == gpu && $gpu_url_given -eq 0 ]]; then
+  gpu_url=http://127.0.0.1:8080
+fi
+
+tmpfile=$(mktemp)
+trap 'rm -f "$tmpfile"' EXIT
+
+dc() {
+  local args=(-f "$compose_dir/compose.yaml")
+
+  if file_exists "$env_file"; then
+    args+=(--env-file "$env_file")
+  fi
+
+  args+=(--env-file "$compose_dir/stack.env")
+
+  if [[ $target == gpu ]] && file_exists "$compose_dir/compose.cpu.yaml"; then
+    args+=(-f "$compose_dir/compose.cpu.yaml")
+  fi
+
+  if [[ $EUID -ne 0 ]]; then
+    sudo docker compose "${args[@]}" "$@"
+  else
+    docker compose "${args[@]}" "$@"
+  fi
+}
+
+chat_request() {
+  local url=$1
+  local auth_header=${2:-}
+  local extra_header=${3:-}
+  local args=(
+    -sS
+    -o "$tmpfile"
+    -w '%{http_code}'
+    --max-time "$timeout"
+    -H "Content-Type: application/json"
+    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word.\"}],\"max_tokens\":32}"
+  )
+
+  if [[ -n "$auth_header" ]]; then
+    args+=(-H "$auth_header")
+  fi
+  if [[ -n "$extra_header" ]]; then
+    args+=(-H "$extra_header")
+  fi
+
+  curl "${args[@]}" "$url" 2>/dev/null
+}
+
+# Read a KEY=value from the env file; it is 0600 root, so a normal user reads it through sudo.
+read_env_var() {
+  if [[ -r "$env_file" ]]; then
+    grep "^$1=" "$env_file" | head -1 | cut -d'=' -f2- || true
+  else
+    sudo grep "^$1=" "$env_file" | head -1 | cut -d'=' -f2- || true
+  fi
+}
+
+# LITELLM_MASTER_KEY (entry only) and LLAMA_SWAP_KEY (both stacks; llama-swap requires it) from the env file
+# unless already set in the environment.
+if file_exists "$env_file"; then
+  if [[ $target == entry && -z ${LITELLM_MASTER_KEY:-} ]]; then
+    LITELLM_MASTER_KEY=$(read_env_var LITELLM_MASTER_KEY)
+  fi
+  if [[ -z ${LLAMA_SWAP_KEY:-} ]]; then
+    LLAMA_SWAP_KEY=$(read_env_var LLAMA_SWAP_KEY)
+  fi
+fi
+gpu_auth=()
+if [[ -n ${LLAMA_SWAP_KEY:-} ]]; then
+  gpu_auth=(-H "Authorization: Bearer $LLAMA_SWAP_KEY")
+fi
+
+# Check: compose-health
+if command -v docker >/dev/null 2>&1; then
+  compose_file="$compose_dir/compose.yaml"
+  stack_env="$compose_dir/stack.env"
+
+  if ! file_exists "$compose_file"; then
+    skip compose-health "compose file not found: $compose_file"
+  elif ! file_exists "$stack_env"; then
+    skip compose-health "stack env file not found: $stack_env"
+  else
+    ps_output=$(dc ps --format '{{.Name}} {{.Health}}' 2>&1) || {
+      fail compose-health "docker compose ps failed: $ps_output"
+      ps_output=
+    }
+
+    if [[ -n "$ps_output" ]]; then
+      unhealthy=0
+      while IFS= read -r line; do
+        if [[ -z "$line" ]]; then
+          continue
+        fi
+        health=${line##* }
+        if [[ "$health" != "healthy" ]]; then
+          unhealthy=1
+          break
+        fi
+      done <<< "$ps_output"
+
+      if [[ $unhealthy -eq 1 ]]; then
+        fail compose-health "one or more services are not healthy"
+      else
+        pass compose-health
+      fi
+    else
+      fail compose-health "no services found"
+    fi
+  fi
+else
+  skip compose-health "docker not available"
+fi
+
+# Check: disk-free
+disk_free_seen=()
+# Root, the stack directory and the volume mounted below it (data on kai-entry, models on kai-gpu).
+for disk_path in / "$compose_dir" "$compose_dir/data" "$compose_dir/models"; do
+  [[ -d "$disk_path" ]] || continue
+  mount=$(df --output=target "$disk_path" 2>/dev/null | tail -1 | tr -d ' ')
+
+  if [[ -z "$mount" ]]; then
+    fail "disk-free $disk_path" "cannot determine mount"
+    continue
+  fi
+
+  duplicate=0
+  if ((${#disk_free_seen[@]} > 0)); then
+    for seen_mount in "${disk_free_seen[@]}"; do
+      if [[ "$seen_mount" == "$mount" ]]; then
+        duplicate=1
+        break
+      fi
+    done
+  fi
+
+  if [[ $duplicate -eq 1 ]]; then
+    continue
+  fi
+
+  disk_free_seen+=("$mount")
+
+  avail=$(df --output=avail -BG "$disk_path" 2>/dev/null | tail -1 | tr -dc 0-9)
+
+  if [[ -z "$avail" ]]; then
+    fail "disk-free $mount" "cannot determine free space"
+    continue
+  fi
+
+  if ((avail >= min_free_gb)); then
+    pass "disk-free $mount ($avail GB)"
+  else
+    fail "disk-free $mount" "$avail GB free, want >= $min_free_gb GB"
+  fi
+done
+
+if [[ $target == entry ]]; then
+  # Check: open-webui-health
+  http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "$webui_url/health" 2>/dev/null) || http_code=000
+  if [[ "$http_code" == "200" ]]; then
+    pass open-webui-health
+  else
+    fail open-webui-health "HTTP $http_code"
+  fi
+
+  # Check: litellm-liveliness
+  http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "$litellm_url/health/liveliness" 2>/dev/null) || http_code=000
+  if [[ "$http_code" == "200" ]]; then
+    pass litellm-liveliness
+  else
+    fail litellm-liveliness "HTTP $http_code"
+  fi
+
+  # Check: litellm-models
+  if [[ -n ${LITELLM_MASTER_KEY:-} ]]; then
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' -H "Authorization: Bearer $LITELLM_MASTER_KEY" "$litellm_url/v1/models" 2>/dev/null) || http_code=000
+    if [[ "$http_code" == "200" ]]; then
+      model_ids=$(grep -o '"id":"[^"]*"' "$tmpfile" | head -1 | cut -d'"' -f4 || true)
+      if [[ -n "$model_ids" ]]; then
+        pass litellm-models
+        if [[ -z "$model" ]]; then
+          model=$model_ids
+        fi
+      else
+        fail litellm-models "no model ids in response"
+      fi
+    else
+      fail litellm-models "HTTP $http_code"
+    fi
+  else
+    skip litellm-models "LITELLM_MASTER_KEY not set"
+  fi
+
+  # Check: gpu-name-resolution
+  if [[ -n "$gpu_url" ]]; then
+    host=${gpu_url#*://}
+    host=${host%%/*}
+    host=${host%%:*}
+
+    if [[ -z "$host" ]]; then
+      fail gpu-name-resolution "invalid gpu-url"
+    elif dc exec -T litellm python3 -c 'import socket,sys; print(socket.gethostbyname(sys.argv[1]))' "$host" >/dev/null 2>&1; then
+      pass "gpu-name-resolution ($host)"
+    else
+      fail gpu-name-resolution "litellm container cannot resolve $host"
+    fi
+  fi
+
+  # Check: gpu-models
+  if [[ -n "$gpu_url" ]]; then
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "${gpu_auth[@]}" "$gpu_url/v1/models" 2>/dev/null) || http_code=000
+    if [[ "$http_code" == "200" ]]; then
+      pass gpu-models
+    else
+      fail gpu-models "HTTP $http_code"
+    fi
+  else
+    skip gpu-models "gpu-url not set"
+  fi
+
+  # Check: litellm-user (kai-bootstrap step litellm-users created this user)
+  user_tracked=0
+  if [[ -z "$user_email" ]]; then
+    skip litellm-user "--user-email / KAI_SMOKE_USER not set"
+  elif [[ -z ${LITELLM_MASTER_KEY:-} ]]; then
+    skip litellm-user "LITELLM_MASTER_KEY not set"
+  else
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' -G -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+      --data-urlencode "user_id=$user_email" "$litellm_url/user/info" 2>/dev/null) || http_code=000
+    if [[ "$http_code" == "200" ]] && python3 -c 'import json,sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("user_info") or {}).get("user_id") == sys.argv[2] else 1)' "$tmpfile" "$user_email" 2>/dev/null; then
+      pass litellm-user
+      user_tracked=1
+    else
+      fail litellm-user "HTTP $http_code, run kai-bootstrap (step litellm-users)"
+    fi
+  fi
+
+  # Count the user's spend logs, so usage-per-user can see whether the chat added one.
+  spend_logs_count() {
+    curl -sS -G -H "Authorization: Bearer $LITELLM_MASTER_KEY" --data-urlencode "user_id=$user_email" \
+      "$litellm_url/spend/logs" 2>/dev/null |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else -1)' 2>/dev/null || echo -1
+  }
+
+  # Check: chat (with Open WebUI's e-mail header when the user is known, as Open WebUI sends it)
+  chat_ok=0
+  if [[ $no_chat -eq 1 ]]; then
+    skip chat "--no-chat specified"
+  elif [[ -z ${LITELLM_MASTER_KEY:-} ]]; then
+    skip chat "LITELLM_MASTER_KEY not set"
+  elif [[ -z "$model" ]]; then
+    skip chat "no model available"
+  else
+    user_header=
+    if [[ $user_tracked -eq 1 ]]; then
+      logs_before=$(spend_logs_count)
+      user_header="X-OpenWebUI-User-Email: $user_email"
+    fi
+    start_time=$(date +%s)
+    http_code=$(chat_request "$litellm_url/v1/chat/completions" "Authorization: Bearer $LITELLM_MASTER_KEY" "$user_header") || http_code=000
+    end_time=$(date +%s)
+    elapsed=$((end_time - start_time))
+
+    if [[ "$http_code" == "200" ]] && grep -q '"choices"' "$tmpfile"; then
+      pass "chat (${elapsed}s)"
+      chat_ok=1
+    else
+      fail "chat (${elapsed}s)" "HTTP $http_code"
+    fi
+  fi
+
+  # Check: usage-per-user (user_header_mappings books the chat on that user).
+  # Optional: it needs the chat, so a run with --no-chat or a stopped kai-gpu skips it instead of failing.
+  if [[ $user_tracked -eq 0 || $chat_ok -eq 0 ]]; then
+    skip usage-per-user "needs litellm-user and chat"
+  elif [[ $logs_before -lt 0 ]]; then
+    fail usage-per-user "GET /spend/logs failed"
+  else
+    # LiteLLM writes spend logs in batches, so wait up to a minute.
+    logs_after=$logs_before
+    for _ in $(seq 12); do
+      logs_after=$(spend_logs_count)
+      [[ $logs_after -gt $logs_before ]] && break
+      sleep 5
+    done
+    if [[ $logs_after -gt $logs_before ]]; then
+      pass usage-per-user
+    else
+      fail usage-per-user "no new spend log for $user_email after 60s; user_header_mappings active?"
+    fi
+  fi
+else
+  gpu_smi_available=0
+  chat_passed=0
+
+  # Check: gpu-device
+  # NVIDIA hardware (PCI vendor 0x10de) decides, not nvidia-smi: the test VM installs the driver without a GPU,
+  # while on kai-gpu a missing nvidia-smi is a failure.
+  if ! grep -qsx 0x10de /sys/bus/pci/devices/*/vendor; then
+    skip gpu-device "no NVIDIA GPU (CPU test VM)"
+  elif ! command -v nvidia-smi >/dev/null 2>&1; then
+    fail gpu-device "NVIDIA GPU present but nvidia-smi missing"
+  else
+    gpu_smi_available=1
+    if gpu_output=$(nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader 2>&1); then
+      first_line=${gpu_output%%$'\n'*}
+      pass "gpu-device ($first_line)"
+    else
+      fail gpu-device "$gpu_output"
+    fi
+  fi
+
+  # Check: gpu-models
+  if [[ -n "$gpu_url" ]]; then
+    http_code=$(curl -sS -o "$tmpfile" -w '%{http_code}' "${gpu_auth[@]}" "$gpu_url/v1/models" 2>/dev/null) || http_code=000
+    if [[ "$http_code" == "200" ]]; then
+      pass gpu-models
+      if [[ -z "$model" ]]; then
+        model=$(grep -o '"id":"[^"]*"' "$tmpfile" | head -1 | cut -d'"' -f4 || true)
+      fi
+    else
+      fail gpu-models "HTTP $http_code"
+    fi
+  else
+    skip gpu-models "gpu-url not set"
+  fi
+
+  # Check: chat
+  if [[ $no_chat -eq 1 ]]; then
+    skip chat "--no-chat specified"
+  elif [[ -z "$model" ]]; then
+    skip chat "no model available"
+  else
+    start_time=$(date +%s)
+    http_code=$(chat_request "$gpu_url/v1/chat/completions" "${gpu_auth[1]:-}") || http_code=000
+    end_time=$(date +%s)
+    elapsed=$((end_time - start_time))
+
+    if [[ "$http_code" == "200" ]] && grep -q '"choices"' "$tmpfile"; then
+      pass "chat (${elapsed}s)"
+      chat_passed=1
+    else
+      fail "chat (${elapsed}s)" "HTTP $http_code"
+    fi
+  fi
+
+  # Check: gpu-offload
+  if [[ $gpu_smi_available -eq 1 && $chat_passed -eq 1 ]]; then
+    if compute_apps=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>&1) && [[ -n "$compute_apps" ]]; then
+      pass gpu-offload
+    else
+      fail gpu-offload "model runs without GPU (no compute process)"
+    fi
+  fi
+fi
+
+# Check: boot-config (house rule core_09: the files a reboot depends on must parse on the machine itself)
+if [[ $EUID -ne 0 ]]; then
+  skip boot-config "needs root"
+else
+  if sshd -t >/dev/null 2>&1; then pass boot-config-sshd; else fail boot-config-sshd "$(sshd -t 2>&1 | head -1)"; fi
+  if findmnt --verify >/dev/null 2>&1; then pass boot-config-fstab; else fail boot-config-fstab "$(findmnt --verify 2>&1 | grep -m1 -E '\[[EW]\]' || true)"; fi
+  if visudo -c >/dev/null 2>&1; then pass boot-config-sudoers; else fail boot-config-sudoers "$(visudo -c 2>&1 | grep -vm1 'parsed OK' || true)"; fi
+  mapfile -t own_units < <(find /etc/systemd/system -maxdepth 1 -type f \( -name 'kai-*.service' -o -name 'kai-*.timer' \))
+  if ((${#own_units[@]} == 0)); then
+    skip boot-config-units "no own units"
+  elif verify_out=$(systemd-analyze verify "${own_units[@]}" 2>&1) && [[ -z "$verify_out" ]]; then
+    pass "boot-config-units (${#own_units[@]})"
+  else
+    fail boot-config-units "$(head -1 <<< "$verify_out")"
+  fi
+fi
+
+# Check: security-updates (policy of the role kai_updates; reported here instead of by mail)
+origins=$(apt-config dump 2>/dev/null | sed -n 's/^Unattended-Upgrade::Origins-Pattern:: "\(.*\)";$/\1/p')
+if [[ -z "$origins" ]]; then
+  fail security-updates-policy "no Origins-Pattern (role kai_updates not applied?)"
+elif grep -qv -- '-security,label=Debian-Security$' <<< "$origins"; then
+  fail security-updates-policy "non-security origin: $(grep -v -- '-security,label=Debian-Security$' <<< "$origins" | head -1)"
+else
+  pass security-updates-policy
+fi
+
+uptime_s=$(cut -d. -f1 /proc/uptime)
+stamp=/var/lib/apt/periodic/upgrade-stamp
+stamp_age_h=-1
+[[ -e $stamp ]] && stamp_age_h=$((($(date +%s) - $(stat -c %Y "$stamp")) / 3600))
+upgrade_result=$(systemctl show -p Result --value apt-daily-upgrade.service 2>/dev/null || true)
+if [[ $upgrade_result != success ]]; then
+  fail security-updates-run "apt-daily-upgrade.service result: ${upgrade_result:-unknown} (journalctl -u apt-daily-upgrade)"
+elif ((stamp_age_h >= 0 && stamp_age_h <= 7)); then
+  pass "security-updates-run (${stamp_age_h} h ago)"
+elif ((uptime_s < 3600)); then
+  skip security-updates-run "booted $((uptime_s / 60)) min ago, first run 8 min after boot"
+else
+  fail security-updates-run "last run ${stamp_age_h} h ago, want <= 7 h"
+fi
+
+if [[ -e /run/reboot-required ]]; then
+  reboot_age_h=$((($(date +%s) - $(stat -c %Y /run/reboot-required)) / 3600))
+  if [[ $target == entry && $reboot_age_h -ge 26 ]]; then
+    fail kernel-reboot "pending for ${reboot_age_h} h, the nightly automatic reboot did not happen"
+  else
+    skip kernel-reboot "pending for ${reboot_age_h} h ($([[ $target == entry ]] && echo 'nightly automatic reboot' || echo 'next stop and start'))"
+  fi
+else
+  pass kernel-reboot
+fi
+
+if [[ $failures -eq 0 ]]; then
+  printf 'kai-smoke: all checks passed\n'
+  exit 0
+else
+  printf 'kai-smoke: %d check(s) failed\n' "$failures"
+  exit 1
+fi

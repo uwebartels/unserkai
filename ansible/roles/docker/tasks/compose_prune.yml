@@ -1,0 +1,8 @@
+---
+# Aufruf aus den Stack-Rollen nach einem geaenderten 'compose up': entfernt Images,
+# die kein Container mehr nutzt (etwa das alte Image nach einem Update).
+- name: Ungenutzte Images entfernen
+  ansible.builtin.command:
+    cmd: docker image prune --all --force
+  register: docker_prune
+  changed_when: "'Total reclaimed space: 0B' not in docker_prune.stdout"

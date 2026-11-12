@@ -2,11 +2,28 @@
 - name: Unterstuetzte Distribution pruefen
   ansible.builtin.assert:
     that:
-      - ansible_facts['os_family'] == 'Debian'
+      - ansible_facts['distribution'] == 'Debian'
     fail_msg: >-
-      Diese Rolle unterstuetzt nur Debian und Ubuntu.
+      Diese Rolle unterstuetzt nur Debian.
       Gefunden: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
     quiet: true
+
+- name: Proxy fuer apt eintragen
+  ansible.builtin.copy:
+    content: |
+      Acquire::http::Proxy "{{ kai_http_proxy }}";
+      Acquire::https::Proxy "{{ kai_http_proxy }}";
+    dest: /etc/apt/apt.conf.d/90kai-proxy
+    owner: root
+    group: root
+    mode: "0644"
+  when: kai_http_proxy | default('') | length > 0
+
+- name: Proxy fuer apt entfernen
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/90kai-proxy
+    state: absent
+  when: kai_http_proxy | default('') | length == 0
 
 - name: Paketindex aktualisieren
   ansible.builtin.apt:
@@ -37,3 +54,31 @@
     owner: root
     group: root
     mode: "0644"
+
+# Namen, die noch kein DNS aufloest (Overlay inventory/local/); leer = nichts eintragen.
+- name: Zusaetzliche Hosts-Eintraege setzen
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} kai_extra_hosts"
+    block: |
+      {% for name, ip in kai_extra_hosts.items() %}
+      {{ ip }} {{ name }}
+      {% endfor %}
+  when: kai_extra_hosts | default({}) | length > 0
+
+# core_13 of the house setup; emergency access is the SSM shell session, which does not depend on sshd.
+- name: Sshd haerten
+  ansible.builtin.copy:
+    content: |
+      # Managed by Ansible, role common; sorts before other drop-ins, sshd takes the first value.
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      X11Forwarding no
+      AllowAgentForwarding no
+    dest: /etc/ssh/sshd_config.d/05-kai.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Sshd neu laden

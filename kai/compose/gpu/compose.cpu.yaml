@@ -1,0 +1,10 @@
+# Zusatzdatei fuer Maschinen ohne GPU (kai_gpu_enabled: false):
+#   docker compose -f compose.yaml -f compose.cpu.yaml up -d
+# Das CPU-Image liest die Konfiguration aus /app/config.yaml (das unified-Image aus /etc/llama-swap/config).
+# Das CUDA-Image startet ohne GPU nicht (llama-server braucht libcuda.so.1), also ein CPU-Image.
+services:
+  llama-swap:
+    image: ghcr.io/mostlygeek/llama-swap:v266-cpu-b11804@sha256:8096337ff965c5732af90b23fd100feaff6fabeceeef557466598565469b4a86
+    deploy: !reset null
+    volumes:
+      - ./llama-swap.yaml:/app/config.yaml:ro

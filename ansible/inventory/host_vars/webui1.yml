@@ -1,0 +1,13 @@
+---
+# webui1 in AWS (t3.medium, Debian 13): Zugang ueber SSM, der Weg steht in ~/.ssh/config (Host = Instanz-ID).
+# Namen und IDs folgen Uwes Terraform (aws/webui1); nie eine IP hier.
+ansible_host: i-0f6dc684ea90b09cf
+ansible_user: admin
+# In AWS muss das Datenvolume da sein; die Rolle bricht sonst ab.
+kai_volume_required: true
+# Der Host, dessen Modelle LiteLLM ausliefert (kai_gpu_models).
+kai_gpu_peer: kai1
+# Volume kai-data (20 GB): nur Rueckfall, ein vorhandenes Label kai-data hat Vorrang.
+kai_volume_device: /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol040ff91a9877e45cf
+# Axel legt die fertige .env vorab hier ab (root, 0600); die Rolle kopiert sie nach /opt/kai/.env, falls dort keine liegt.
+kai_entry_env_seed: /root/kai-entry.env

@@ -1,0 +1,103 @@
+# Kai Entry-Stack (kai-entry): Open WebUI, LiteLLM, LiteLLM-Datenbank, Brave-MCP.
+# Geheimnisse stehen in .env neben dieser Datei (nie im Repo), nicht geheime
+# Werte (Adressen, Ports) mit Standardwert hier; Images werden mit
+# kai/bin/kai-pin-images auf Tag + Digest gepinnt.
+name: kai
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def
+    restart: unless-stopped
+    env_file:
+      - .env
+      - path: ./proxy.env
+        required: false
+    environment:
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY}
+      ENABLE_OLLAMA_API: "false"
+      # Sends X-OpenWebUI-User-Id/-Email/-Name/-Role to LiteLLM, which books the tokens on that user
+      # (user_header_mappings in litellm.yaml); the shared key open-webui stays the same.
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+    # Der Filter "Kai-Status" fragt den Pfoertner auf dem Host (kai-pfoertner, Bridge-Adresse der Maschine).
+    extra_hosts:
+      - "kai-pfoertner:host-gateway"
+    ports:
+      - "${KAI_WEBUI_BIND:-127.0.0.1}:${KAI_WEBUI_PORT:-3000}:8080"
+    volumes:
+      - /opt/kai/data/open-webui:/app/backend/data
+    networks: [kai]
+    depends_on:
+      litellm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.83.14-stable.patch.3@sha256:f12d528d4a05add56cb09e54c5126088f2edc6bdf3a2f943bcd3a32b08769da2
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@litellm-db:5432/litellm
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "${KAI_LITELLM_BIND:-127.0.0.1}:${KAI_LITELLM_PORT:-4000}:4000"
+    volumes:
+      - ./litellm.yaml:/app/config.yaml:ro
+      # Namen aus kai_extra_hosts (/etc/hosts der Maschine), solange kai1 kein DNS hat.
+      - /etc/hosts:/etc/hosts:ro
+    networks: [kai]
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  litellm-db:
+    image: docker.io/library/postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_DB: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD}
+    volumes:
+      - /opt/kai/data/litellm-db:/var/lib/postgresql/data
+    networks: [kai]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  brave-mcp:
+    image: docker.io/mcp/brave-search:latest@sha256:f58a5c22c1196ec7bd1ca586ce216f2334fc298550ddcf652c0e8adb6d256d78
+    restart: unless-stopped
+    env_file:
+      - path: ./proxy.env
+        required: false
+    environment:
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      BRAVE_MCP_TRANSPORT: http
+      BRAVE_MCP_PORT: "8000"
+      BRAVE_MCP_HOST: 0.0.0.0
+    networks: [kai]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8000"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  kai:
+    name: kai

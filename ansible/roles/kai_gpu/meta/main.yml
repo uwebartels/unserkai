@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: kai_gpu
+  author: unserkai
+  description: Installiert den NVIDIA-Treiber und rollt den Kai-GPU-Stack (llama-swap) aus
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - containers
+    - gpu
+dependencies:
+  - role: docker

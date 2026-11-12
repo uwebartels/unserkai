@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# kai-gpu: start, stop and inspect the kai-gpu EC2 instance with the AWS CLI.
+# Usage: kai-gpu [options] status|start|stop
+# Options:
+#   --instance-id ID   EC2 instance ID (default: env KAI_GPU_INSTANCE_ID; required).
+#   --profile NAME     AWS profile (default: env KAI_AWS_PROFILE; required).
+#   --region REGION    AWS region (default: eu-central-1).
+#   --dry-run          Print aws commands to stderr instead of running them.
+#   -h|--help          Print this usage and exit 0.
+set -euo pipefail
+
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+# Unset AWS_PROFILE so a direnv profile can never leak in.
+unset AWS_PROFILE
+
+instance_id=${KAI_GPU_INSTANCE_ID:-}
+profile=${KAI_AWS_PROFILE:-}
+region=eu-central-1
+dry_run=0
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --instance-id)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --instance-id requires an argument\n' >&2
+        exit 2
+      fi
+      instance_id=$2
+      shift 2
+      ;;
+    --profile)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --profile requires an argument\n' >&2
+        exit 2
+      fi
+      profile=$2
+      shift 2
+      ;;
+    --region)
+      if [[ $# -lt 2 ]]; then
+        printf 'error: --region requires an argument\n' >&2
+        exit 2
+      fi
+      region=$2
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --*)
+      printf 'error: unknown option: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -ne 1 ]]; then
+  printf 'error: expected exactly one command\n' >&2
+  usage >&2
+  exit 2
+fi
+
+command=$1
+
+# Validate instance ID
+if [[ -z $instance_id ]]; then
+  printf 'error: --instance-id is required (or set KAI_GPU_INSTANCE_ID)\n' >&2
+  exit 2
+fi
+
+if [[ ! $instance_id =~ ^i-[0-9a-f]{8,17}$ ]]; then
+  printf 'error: invalid instance ID: %s\n' "$instance_id" >&2
+  exit 2
+fi
+
+# Validate profile
+if [[ -z $profile ]]; then
+  printf 'error: an explicit AWS profile is required (the repo .envrc sets the terraform profile)\n' >&2
+  exit 2
+fi
+
+aws_cmd() {
+  if [[ $dry_run -eq 1 ]]; then
+    printf '+ aws --profile %s --region %s %s\n' "$profile" "$region" "$*" >&2
+  else
+    aws --profile "$profile" --region "$region" "$@"
+  fi
+}
+
+get_state() {
+  if [[ $dry_run -eq 1 ]]; then
+    printf 'dry-run\n'
+    return
+  fi
+  aws_cmd ec2 describe-instances \
+    --instance-ids "$instance_id" \
+    --query 'Reservations[0].Instances[0].State.Name' \
+    --output text
+}
+
+printf 'kai-gpu: %s %s (region %s)\n' "$command" "$instance_id" "$region"
+
+case "$command" in
+  status)
+    state=$(get_state)
+    printf '%s\n' "$state"
+    ;;
+  start)
+    state=$(get_state)
+    if [[ $state == terminated || $state == shutting-down ]]; then
+      printf 'error: instance is %s, cannot start\n' "$state" >&2
+      exit 1
+    fi
+    if [[ $state == stopping ]]; then
+      printf 'error: instance is stopping, retry shortly\n' >&2
+      exit 1
+    fi
+    if [[ $state == running ]]; then
+      printf 'already running\n'
+    else
+      aws_cmd ec2 start-instances --instance-ids "$instance_id" > /dev/null
+    fi
+    aws_cmd ec2 wait instance-running --instance-ids "$instance_id"
+    aws_cmd ec2 wait instance-status-ok --instance-ids "$instance_id"
+    printf 'running\n'
+    ;;
+  stop)
+    state=$(get_state)
+    if [[ $state == terminated ]]; then
+      printf 'error: instance is terminated, cannot stop\n' >&2
+      exit 1
+    fi
+    if [[ $state == stopped ]]; then
+      printf 'already stopped\n'
+    else
+      aws_cmd ec2 stop-instances --instance-ids "$instance_id" > /dev/null
+    fi
+    aws_cmd ec2 wait instance-stopped --instance-ids "$instance_id"
+    printf 'stopped\n'
+    ;;
+  *)
+    printf 'error: unknown command: %s\n' "$command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

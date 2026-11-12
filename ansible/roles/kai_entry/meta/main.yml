@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: kai_entry
+  author: unserkai
+  description: Rollt den Kai-Entry-Stack (Open WebUI, LiteLLM, Brave-MCP) aus
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - containers
+dependencies:
+  - role: docker

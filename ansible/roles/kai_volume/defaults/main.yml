@@ -1,0 +1,16 @@
+---
+# Datenvolume per Dateisystem-Label einbinden (nie per Geraetename).
+#
+# Label des Dateisystems, zum Beispiel kai-data oder kai-models (Pflicht).
+kai_volume_label: ""
+# Einhaengepunkt.
+kai_volume_mountpoint: ""
+# true auf den AWS-Maschinen: das Volume muss da sein, sonst Abbruch.
+# false auf Test-VMs: ohne Volume bleibt der Einhaengepunkt ein Verzeichnis.
+kai_volume_required: false
+# Verlangter Typ; ein gefundenes Label mit anderem Typ bricht ab, es wird nie umformatiert.
+kai_volume_fstype: xfs
+# Pfad der Datenplatte unter /dev/disk/by-id (host_vars), Pflicht wenn kai_volume_required gilt
+# und noch kein Dateisystem mit dem Label existiert; die Platte muss leer sein.
+# AWS: nvme-Amazon_Elastic_Block_Store_vol<ID ohne Bindestrich>, Test-VM: virtio-<Label>.
+kai_volume_device: ""

@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+"""
+kai-bootstrap: First-time setup helper for KAI stack.
+
+Run this script ON kai-entry (Debian 13) as root after `make deploy`.
+It configures LiteLLM and Open WebUI, creates admin/user accounts,
+registers the Brave MCP tool server, and disables public signup.
+
+Idempotent: running it twice changes nothing the second time.
+
+Passwords are never written to disk. Generated start passwords are printed
+once at the end; store them in the team KeePass and hand them out. On later
+runs the admin password comes from KAI_ADMIN_PASSWORD or an interactive prompt.
+
+Options:
+  --env-file PATH          Path to .env file (default: /opt/kai/.env)
+  --compose-dir PATH       Path to compose directory (default: /opt/kai)
+  --litellm-url URL        LiteLLM base URL (default: http://127.0.0.1:4000)
+  --litellm-internal-url URL  LiteLLM URL inside the Docker network (default: http://litellm:4000/v1)
+  --webui-url URL          Open WebUI base URL (default: http://127.0.0.1:3000)
+  --admin-email EMAIL      Admin email (default: env KAI_ADMIN_EMAIL, required for account steps)
+  KAI_ADMIN_PASSWORD       Env var with the admin password for runs after the first one
+  --users-file PATH        Text file with lines "Name,email" (optional)
+  --brave-url URL          Brave MCP URL (default: http://brave-mcp:8000/mcp)
+  --dry-run                Print what would happen, change nothing
+  --apply-compose          After changing .env, run docker compose up -d --wait
+  --skip STEP              Skip a step (repeatable)
+  --harness-key EMAIL:ALIAS  Only create a LiteLLM key for a harness (e.g. a@example.org:a-openclaw),
+                           booked on the LiteLLM user EMAIL; repeatable; needs only the master key.
+                           The key is shown once on stdout and never stored; an existing alias is
+                           refused, never replaced. Skip it with --skip harness-key.
+
+Steps:
+  1. litellm-key: Generate/verify LiteLLM key for Open WebUI
+  2. admin: Create or authenticate admin account
+  3. openai-connection: Set Open WebUI's LiteLLM connection and key
+  4. users: Create user accounts from users-file
+  4a. litellm-users: Create a LiteLLM internal_user per users-file line and for the admin
+      (user_id = e-mail, so Open WebUI's e-mail header and harness keys book on the same user)
+  5. brave-tool: Register Brave MCP tool server
+  6. status-filter: Install the global filter Kai-Status (start progress of kai-gpu)
+  7. signup-off: Disable public signup
+
+Exit codes: 0=ok, 1=step failed, 2=usage error
+"""
+
+import argparse
+import getpass
+import json
+import os
+import secrets
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import subprocess
+from pathlib import Path
+from typing import Optional, Tuple, Any, Dict, List
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('--env-file', default='/opt/kai/.env', help='Path to .env file')
+    parser.add_argument('--compose-dir', default='/opt/kai', help='Path to compose directory')
+    parser.add_argument('--litellm-url', default='http://127.0.0.1:4000', help='LiteLLM base URL')
+    parser.add_argument('--litellm-internal-url', default='http://litellm:4000/v1',
+                        help='LiteLLM URL as seen from the Open WebUI container')
+    parser.add_argument('--webui-url', default='http://127.0.0.1:3000', help='Open WebUI base URL')
+    parser.add_argument('--admin-email', default=os.environ.get('KAI_ADMIN_EMAIL'), help='Admin email')
+    parser.add_argument('--users-file', default=None, help='Text file with lines "Name,email"')
+    parser.add_argument('--filter-file', default='/opt/kai/kai_status_filter.py',
+                        help='Open WebUI filter "Kai-Status" (shows the start progress of kai-gpu)')
+    parser.add_argument('--brave-url', default='http://brave-mcp:8000/mcp', help='Brave MCP URL')
+    parser.add_argument('--dry-run', action='store_true', help='Print what would happen, change nothing')
+    parser.add_argument('--apply-compose', action='store_true', help='Run docker compose after .env changes')
+    parser.add_argument('--skip', action='append', default=[], help='Skip a step (repeatable)')
+    parser.add_argument('--harness-key', action='append', default=[], metavar='EMAIL:ALIAS',
+                        help='Only create a LiteLLM key for a harness, booked on user EMAIL (repeatable)')
+    
+    args = parser.parse_args()
+    
+    # Validate required arguments
+    for spec in args.harness_key:
+        email, _, alias = spec.partition(':')
+        if '@' not in email or not alias:
+            print(f"[FAIL] usage: --harness-key needs EMAIL:ALIAS, got {spec!r}", file=sys.stderr)
+            sys.exit(2)
+    if not args.admin_email and not args.harness_key:
+        print("[FAIL] usage: --admin-email is required (or set KAI_ADMIN_EMAIL env var)", file=sys.stderr)
+        sys.exit(2)
+    
+    return args
+
+
+def http_request(
+    url: str,
+    method: str = 'GET',
+    data: Optional[Dict[str, Any]] = None,
+    bearer_token: Optional[str] = None,
+    timeout: int = 30
+) -> Tuple[int, Any]:
+    """
+    Make HTTP request with JSON in/out.
+    
+    Returns (status_code, parsed_json_or_text).
+    Never raises on HTTP error codes.
+    """
+    headers = {'Content-Type': 'application/json'}
+    if bearer_token:
+        headers['Authorization'] = f'Bearer {bearer_token}'
+    
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode('utf-8')
+    
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            status = response.status
+            content = response.read().decode('utf-8')
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                parsed = content
+            return (status, parsed)
+    except urllib.error.HTTPError as e:
+        status = e.code
+        try:
+            content = e.read().decode('utf-8')
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                parsed = content
+        except Exception:
+            parsed = ''
+        return (status, parsed)
+    except Exception as e:
+        return (0, str(e))
+
+
+def read_env_file(path: str) -> Dict[str, str]:
+    """Read KEY=VALUE pairs from env file."""
+    env = {}
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    env[key.strip()] = value.strip()
+    except FileNotFoundError:
+        pass
+    return env
+
+
+def update_env_file_in_place(path: str, key: str, value: str) -> bool:
+    """
+    Update or add a key in the env file in place.
+    Returns True if file was changed.
+    """
+    try:
+        with open(path, 'r') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        lines = []
+    
+    changed = False
+    new_lines = []
+    found = False
+    
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f'{key}='):
+            new_lines.append(f'{key}={value}\n')
+            found = True
+            changed = True
+        else:
+            new_lines.append(line)
+    
+    if not found:
+        new_lines.append(f'{key}={value}\n')
+        changed = True
+    
+    if changed:
+        # Preserve original file mode
+        try:
+            stat = os.stat(path)
+            mode = stat.st_mode
+        except FileNotFoundError:
+            mode = 0o644
+        
+        temp_path = path + '.tmp'
+        # Create the temp file 0600 from the start: it holds secrets.
+        fd = os.open(temp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.writelines(new_lines)
+        os.chmod(temp_path, mode & 0o777)
+        os.replace(temp_path, path)
+    
+    return changed
+
+
+LEGACY_SECRETS_FILE = '/opt/kai/accounts.txt'
+
+
+def admin_password_from_operator(email: str) -> Optional[str]:
+    """Return the admin password from KAI_ADMIN_PASSWORD or an interactive prompt."""
+    password = os.environ.get('KAI_ADMIN_PASSWORD')
+    if password:
+        return password
+    if sys.stdin.isatty():
+        return getpass.getpass(f'Open WebUI password for {email}: ') or None
+    return None
+
+
+def generate_password(length: int = 24) -> str:
+    """Generate a URL-safe password."""
+    return secrets.token_urlsafe(length)[:length]
+
+
+def step_litellm_key(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 1: Generate/verify LiteLLM key for Open WebUI."""
+    if 'litellm-key' in args.skip:
+        return (True, 'skipped by user')
+    
+    if args.dry_run:
+        print('[DRY] litellm-key: would verify/generate LiteLLM key')
+        return (True, 'dry run')
+    
+    env = read_env_file(args.env_file)
+    master_key = env.get('LITELLM_MASTER_KEY', '')
+    openwebui_key = env.get('OPENWEBUI_LITELLM_KEY', '')
+    
+    # Check if existing key works
+    if openwebui_key:
+        status, _ = http_request(
+            f'{args.litellm_url}/v1/models',
+            bearer_token=openwebui_key
+        )
+        if status == 200:
+            return (True, 'existing key valid')
+    
+    # Generate new key
+    if not master_key:
+        return (False, 'LITELLM_MASTER_KEY not found in env file')
+    
+    # Try to delete existing alias first
+    http_request(
+        f'{args.litellm_url}/key/delete',
+        method='POST',
+        data={'key_aliases': ['open-webui']},
+        bearer_token=master_key
+    )
+    
+    # Generate new key
+    status, resp = http_request(
+        f'{args.litellm_url}/key/generate',
+        method='POST',
+        data={'key_alias': 'open-webui'},
+        bearer_token=master_key
+    )
+    
+    if status != 200 or not isinstance(resp, dict) or 'key' not in resp:
+        return (False, f'failed to generate key: status={status}')
+    
+    new_key = resp['key']
+    
+    # Update env file
+    changed = update_env_file_in_place(args.env_file, 'OPENWEBUI_LITELLM_KEY', new_key)
+    if changed:
+        state['env_changed'] = True
+    
+    return (True, 'generated new key')
+
+
+def step_admin(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 2: Create or authenticate admin account."""
+    if 'admin' in args.skip:
+        return (True, 'skipped by user')
+    
+    if args.dry_run:
+        print('[DRY] admin: would create/authenticate admin')
+        return (True, 'dry run')
+    
+    # Check if onboarding is needed
+    status, config = http_request(f'{args.webui_url}/api/config')
+    
+    if status != 200 or not isinstance(config, dict):
+        return (False, 'failed to get webui config')
+    
+    onboarding = config.get('onboarding', False)
+    
+    if onboarding:
+        # Create admin account
+        password = generate_password(24)
+        status, resp = http_request(
+            f'{args.webui_url}/api/v1/auths/signup',
+            method='POST',
+            data={
+                'name': 'Admin',
+                'email': args.admin_email,
+                'password': password
+            }
+        )
+        
+        if status != 200 or not isinstance(resp, dict) or 'token' not in resp:
+            return (False, 'failed to create admin account')
+        
+        state['admin_token'] = resp['token']
+        state['new_accounts'].append((args.admin_email, password))
+        return (True, 'created admin account')
+    else:
+        # Need to sign in
+        admin_password = admin_password_from_operator(args.admin_email)
+        if not admin_password:
+            return (False, 'no admin password: set KAI_ADMIN_PASSWORD or run on a terminal')
+        
+        status, resp = http_request(
+            f'{args.webui_url}/api/v1/auths/signin',
+            method='POST',
+            data={
+                'email': args.admin_email,
+                'password': admin_password
+            }
+        )
+        
+        if status != 200 or not isinstance(resp, dict) or 'token' not in resp:
+            return (False, 'failed to sign in as admin')
+        
+        state['admin_token'] = resp['token']
+        return (True, 'signed in as admin')
+
+
+def step_openai_connection(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 3: Point Open WebUI at LiteLLM with the virtual key.
+
+    Open WebUI stores this connection in its database at first start and then
+    ignores the environment, so the key from the env file must be set via the API.
+    """
+    if 'openai-connection' in args.skip:
+        return (True, 'skipped by user')
+
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+
+    key = read_env_file(args.env_file).get('OPENWEBUI_LITELLM_KEY', '')
+    if not key:
+        return (False, 'OPENWEBUI_LITELLM_KEY is empty in the env file')
+
+    token = state['admin_token']
+    status, cfg = http_request(f'{args.webui_url}/openai/config', bearer_token=token)
+    if status != 200 or not isinstance(cfg, dict):
+        return (False, 'failed to get the OpenAI connection config')
+
+    urls = cfg.get('OPENAI_API_BASE_URLS', [])
+    keys = cfg.get('OPENAI_API_KEYS', [])
+    if urls == [args.litellm_internal_url] and keys == [key]:
+        return (True, 'connection already set')
+
+    if args.dry_run:
+        print('[DRY] openai-connection: would set the LiteLLM connection')
+        return (True, 'dry run')
+
+    status, _ = http_request(
+        f'{args.webui_url}/openai/config/update',
+        method='POST',
+        data={
+            'ENABLE_OPENAI_API': True,
+            'OPENAI_API_BASE_URLS': [args.litellm_internal_url],
+            'OPENAI_API_KEYS': [key],
+            'OPENAI_API_CONFIGS': {},
+        },
+        bearer_token=token,
+    )
+    if status != 200:
+        return (False, 'failed to update the OpenAI connection')
+    return (True, 'connection set to LiteLLM')
+
+
+def read_users_file(path: str) -> List[Tuple[str, str]]:
+    """Return (name, email) pairs from lines "Name,email"; comments and lines without a comma are ignored."""
+    users = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or ',' not in line:
+                continue
+            name, email = line.split(',', 1)
+            users.append((name.strip(), email.strip()))
+    return users
+
+
+class LiteLLM:
+    """The LiteLLM management calls kai-bootstrap needs, all with the master key."""
+
+    def __init__(self, url: str, master_key: str):
+        self.url = url
+        self.key = master_key
+
+    def user_exists(self, user_id: str) -> Tuple[Optional[bool], str]:
+        """True/False if the user is known or not, None with a reason if LiteLLM could not tell."""
+        status, resp = http_request(
+            f'{self.url}/user/info?user_id={urllib.parse.quote(user_id)}', bearer_token=self.key)
+        if status == 200 and isinstance(resp, dict):
+            info = resp.get('user_info')
+            return (bool(info) and info.get('user_id') == user_id, '')
+        if status in (400, 404):
+            return (False, '')
+        return (None, f'GET /user/info: status={status}')
+
+    def create_user(self, user_id: str, alias: str) -> Tuple[Optional[bool], str]:
+        """True if created, None if the e-mail belongs to a user with another user_id (409), else False."""
+        status, _ = http_request(f'{self.url}/user/new', method='POST', bearer_token=self.key, data={
+            'user_id': user_id, 'user_email': user_id, 'user_alias': alias,
+            'user_role': 'internal_user', 'auto_create_key': False})
+        if status == 409:
+            return (None, 'e-mail exists under another user_id (made in the LiteLLM UI?)')
+        return (status == 200, f'POST /user/new: status={status}')
+
+    def key_alias_exists(self, alias: str) -> Tuple[Optional[bool], str]:
+        status, resp = http_request(
+            f'{self.url}/key/list?key_alias={urllib.parse.quote(alias)}', bearer_token=self.key)
+        if status == 200 and isinstance(resp, dict):
+            return (bool(resp.get('keys')), '')
+        return (None, f'GET /key/list: status={status}')
+
+    def generate_key(self, user_id: str, alias: str) -> Tuple[Optional[str], str]:
+        status, resp = http_request(f'{self.url}/key/generate', method='POST', bearer_token=self.key,
+                                    data={'user_id': user_id, 'key_alias': alias})
+        if status == 200 and isinstance(resp, dict) and resp.get('key'):
+            return (resp['key'], '')
+        return (None, f'POST /key/generate: status={status}')
+
+
+def litellm_client(args: argparse.Namespace) -> Optional[LiteLLM]:
+    master_key = read_env_file(args.env_file).get('LITELLM_MASTER_KEY', '')
+    return LiteLLM(args.litellm_url, master_key) if master_key else None
+
+
+def step_litellm_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 4a: a LiteLLM internal_user (user_id = e-mail) for the admin and every users-file line.
+
+    Existing users are left unchanged. Open WebUI's e-mail header (user_header_mappings) and
+    harness keys book on these users, so the e-mails must match Open WebUI's accounts.
+    The admin may already exist as a LiteLLM UI login with a generated user_id; that is only
+    reported, while a users-file e-mail under another user_id fails, as its usage would be lost.
+    """
+    if 'litellm-users' in args.skip:
+        return (True, 'skipped by user')
+    wanted = [('Admin', args.admin_email)]
+    if args.users_file:
+        try:
+            wanted += read_users_file(args.users_file)
+        except FileNotFoundError:
+            return (False, f'users file not found: {args.users_file}')
+    if args.dry_run:
+        print(f'[DRY] litellm-users: would create missing LiteLLM users among {len(wanted)}')
+        return (True, 'dry run')
+    client = litellm_client(args)
+    if not client:
+        return (False, 'LITELLM_MASTER_KEY not found in env file')
+    created = 0
+    notes = []
+    for name, email in wanted:
+        exists, why = client.user_exists(email)
+        if exists is None:
+            return (False, f'{email}: {why}')
+        if exists:
+            continue
+        ok, why = client.create_user(email, name)
+        if ok is None and email == args.admin_email:
+            notes.append(f'admin {email} left as is: {why}')
+            continue
+        if not ok:
+            return (False, f'{email}: {why}; delete that user in the LiteLLM UI to book usage on the e-mail')
+        created += 1
+    return (True, '; '.join([f'created {created} of {len(wanted)} users'] + notes))
+
+
+def step_harness_keys(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """--harness-key: one LiteLLM key per person and harness, booked on the user's e-mail.
+
+    Unlike litellm-key, an existing alias is refused, never deleted: it may be in use.
+    """
+    if 'harness-key' in args.skip:
+        return (True, 'skipped by user')
+    specs = [spec.partition(':')[::2] for spec in args.harness_key]
+    if args.dry_run:
+        for email, alias in specs:
+            print(f'[DRY] harness-key: would create key {alias} for {email}')
+        return (True, 'dry run')
+    client = litellm_client(args)
+    if not client:
+        return (False, 'LITELLM_MASTER_KEY not found in env file')
+    for email, alias in specs:
+        exists, why = client.user_exists(email)
+        if not exists:
+            return (False, why or f'{email} is no LiteLLM user: run the step litellm-users first')
+        taken, why = client.key_alias_exists(alias)
+        if taken is None:
+            return (False, why)
+        if taken:
+            return (False, f'alias {alias} exists already; delete it in the LiteLLM UI if it is really unused')
+        key, why = client.generate_key(email, alias)
+        if not key:
+            return (False, f'{alias}: {why}')
+        state['new_keys'].append((alias, email, key))
+    return (True, f'created {len(specs)} keys')
+
+
+def step_users(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 3: Create user accounts from users-file."""
+    if 'users' in args.skip:
+        return (True, 'skipped by user')
+    
+    if not args.users_file:
+        return (True, 'no users-file provided')
+    
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+    
+    if args.dry_run:
+        print('[DRY] users: would create users from file')
+        return (True, 'dry run')
+    
+    admin_token = state['admin_token']
+    
+    # Get existing users
+    status, users_resp = http_request(
+        f'{args.webui_url}/api/v1/users/all',
+        bearer_token=admin_token
+    )
+    
+    existing_emails = set()
+    if status == 200 and isinstance(users_resp, dict) and 'users' in users_resp:
+        for user in users_resp['users']:
+            if isinstance(user, dict) and 'email' in user:
+                existing_emails.add(user['email'])
+    
+    # Read users file
+    try:
+        with open(args.users_file, 'r') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return (False, f'users file not found: {args.users_file}')
+    
+    created = 0
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        
+        if ',' not in line:
+            continue
+        
+        name, email = line.split(',', 1)
+        name = name.strip()
+        email = email.strip()
+        
+        if email in existing_emails:
+            continue
+        
+        password = generate_password(24)
+        status, resp = http_request(
+            f'{args.webui_url}/api/v1/auths/add',
+            method='POST',
+            data={
+                'name': name,
+                'email': email,
+                'password': password,
+                'role': 'user'
+            },
+            bearer_token=admin_token
+        )
+        
+        if status == 200:
+            state['new_accounts'].append((email, password))
+            created += 1
+    
+    return (True, f'created {created} users')
+
+
+def step_brave_tool(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 4: Register Brave MCP tool server."""
+    if 'brave-tool' in args.skip:
+        return (True, 'skipped by user')
+    
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+    
+    if args.dry_run:
+        print('[DRY] brave-tool: would register Brave MCP tool server')
+        return (True, 'dry run')
+    
+    admin_token = state['admin_token']
+    
+    # Get current tool servers
+    status, resp = http_request(
+        f'{args.webui_url}/api/v1/configs/tool_servers',
+        bearer_token=admin_token
+    )
+    
+    if status != 200 or not isinstance(resp, dict):
+        return (False, 'failed to get tool servers config')
+    
+    connections = resp.get('TOOL_SERVER_CONNECTIONS', [])
+    
+    # Check if brave already registered
+    for conn in connections:
+        if isinstance(conn, dict) and conn.get('info', {}).get('id') == 'brave':
+            return (True, 'brave already registered')
+    
+    # Add brave connection
+    brave_conn = {
+        'url': args.brave_url,
+        'path': '',
+        'type': 'mcp',
+        'auth_type': 'none',
+        'key': None,
+        'headers': None,
+        'config': {'enable': True},
+        'info': {
+            'id': 'brave',
+            'name': 'Brave Search',
+            'description': 'Web search'
+        }
+    }
+    
+    connections.append(brave_conn)
+    
+    # Update config
+    status, _ = http_request(
+        f'{args.webui_url}/api/v1/configs/tool_servers',
+        method='POST',
+        data={'TOOL_SERVER_CONNECTIONS': connections},
+        bearer_token=admin_token
+    )
+    
+    if status != 200:
+        return (False, 'failed to update tool servers config')
+    
+    return (True, 'registered brave tool server')
+
+
+def step_signup_off(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 5: Disable public signup."""
+    if 'signup-off' in args.skip:
+        return (True, 'skipped by user')
+    
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+    
+    if args.dry_run:
+        print('[DRY] signup-off: would disable public signup')
+        return (True, 'dry run')
+    
+    admin_token = state['admin_token']
+    
+    # Get admin config
+    status, config = http_request(
+        f'{args.webui_url}/api/v1/auths/admin/config',
+        bearer_token=admin_token
+    )
+    
+    if status != 200 or not isinstance(config, dict):
+        return (False, 'failed to get admin config')
+    
+    detail = 'signup already disabled'
+    if config.get('ENABLE_SIGNUP', False):
+        # Disable signup in the stored config (it overrides the environment).
+        config['ENABLE_SIGNUP'] = False
+        status, _ = http_request(
+            f'{args.webui_url}/api/v1/auths/admin/config',
+            method='POST',
+            data=config,
+            bearer_token=admin_token
+        )
+        if status != 200:
+            return (False, 'failed to update admin config')
+        detail = 'disabled signup'
+
+    # Keep the env file in line, so a rebuilt database starts closed too.
+    if read_env_file(args.env_file).get('ENABLE_SIGNUP') != 'false':
+        if update_env_file_in_place(args.env_file, 'ENABLE_SIGNUP', 'false'):
+            state['env_changed'] = True
+            detail += ', env file set to false'
+
+    return (True, detail)
+
+
+def step_status_filter(args: argparse.Namespace, state: Dict[str, Any]) -> Tuple[bool, str]:
+    """Step 5: install the global filter "Kai-Status" (kai/openwebui/kai_status_filter.py) in Open WebUI."""
+    if 'status-filter' in args.skip:
+        return (True, 'skipped by user')
+    if not state.get('admin_token'):
+        return (True, 'skipped: no admin token available')
+    if not os.path.exists(args.filter_file):
+        return (False, f'filter file {args.filter_file} not found')
+    if args.dry_run:
+        print('[DRY] status-filter: would install or update the filter')
+        return (True, 'dry run')
+    token = state['admin_token']
+    base = f'{args.webui_url}/api/v1/functions'
+    code = Path(args.filter_file).read_text(encoding='utf-8')
+    body = {'id': 'kai_status', 'name': 'Kai-Status',
+            'meta': {'description': 'Starts kai-gpu on demand and shows the start progress'}, 'content': code}
+    status, current = http_request(f'{base}/id/kai_status', bearer_token=token)
+    if status == 200 and isinstance(current, dict):
+        changed = current.get('content') != code
+        if changed:
+            status, _ = http_request(f'{base}/id/kai_status/update', method='POST', data=body, bearer_token=token)
+    else:
+        current, changed = {}, True
+        status, _ = http_request(f'{base}/create', method='POST', data=body, bearer_token=token)
+    if status != 200:
+        return (False, 'failed to install the filter')
+    for flag, path in (('is_active', 'toggle'), ('is_global', 'toggle/global')):
+        status, now = http_request(f'{base}/id/kai_status', bearer_token=token)
+        if status == 200 and isinstance(now, dict) and not now.get(flag):
+            http_request(f'{base}/id/kai_status/{path}', method='POST', bearer_token=token)
+            changed = True
+    return (True, 'filter installed or updated' if changed else 'filter already current')
+
+
+def main() -> None:
+    """Main entry point."""
+    args = parse_args()
+    
+    state: Dict[str, Any] = {
+        'env_changed': False,
+        'admin_token': None,
+        'new_accounts': [],
+        'new_keys': [],
+    }
+    
+    steps = [
+        ('litellm-key', step_litellm_key),
+        ('admin', step_admin),
+        ('openai-connection', step_openai_connection),
+        ('users', step_users),
+        ('litellm-users', step_litellm_users),
+        ('brave-tool', step_brave_tool),
+        ('status-filter', step_status_filter),
+        ('signup-off', step_signup_off),
+    ]
+    
+    if args.harness_key:
+        steps = [('harness-key', step_harness_keys)]
+
+    any_failed = False
+    
+    for step_name, step_func in steps:
+        try:
+            success, detail = step_func(args, state)
+            if success:
+                print(f'[OK] {step_name}: {detail}')
+            else:
+                print(f'[FAIL] {step_name}: {detail}')
+                any_failed = True
+        except Exception as e:
+            print(f'[FAIL] {step_name}: {str(e)}')
+            any_failed = True
+    
+    # Handle compose apply
+    if state['env_changed']:
+        if args.apply_compose:
+            if args.dry_run:
+                print('[DRY] compose: would run docker compose up -d --wait')
+            else:
+                try:
+                    subprocess.run(
+                        [
+                            'docker', 'compose',
+                            '--project-directory', args.compose_dir,
+                            '--env-file', args.env_file,
+                            '--env-file', f'{args.compose_dir}/stack.env',
+                            'up', '-d', '--wait'
+                        ],
+                        check=True
+                    )
+                    print('[OK] compose: applied')
+                except subprocess.CalledProcessError as e:
+                    print(f'[FAIL] compose: {str(e)}')
+                    any_failed = True
+        else:
+            print(f'hint: run docker compose up -d in {args.compose_dir} to apply .env changes')
+    
+    if state['new_accounts']:
+        print()
+        print('New accounts, shown once and not stored anywhere: '
+              'put them in the team KeePass now and hand them out.')
+        for email, password in state['new_accounts']:
+            print(f'  {email}  {password}')
+        print()
+
+    if state['new_keys']:
+        print()
+        print('New LiteLLM keys, shown once and not stored anywhere: hand each one to its owner now.')
+        for alias, email, key in state['new_keys']:
+            print(f'  {alias}  {email}  {key}')
+        print()
+
+    if os.path.exists(LEGACY_SECRETS_FILE):
+        print(f'warning: {LEGACY_SECRETS_FILE} still holds plaintext passwords; '
+              'move them to the team KeePass, then: shred -u ' + LEGACY_SECRETS_FILE)
+
+    if any_failed:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()

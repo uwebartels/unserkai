@@ -23,8 +23,18 @@ docker_daemon_config:
   live-restore: true
 
 docker_apt_keyring: /etc/apt/keyrings/docker.asc
-docker_apt_arch: arm64
+# Architektur fuer das apt-Repository, aus den Fakten abgeleitet.
+docker_apt_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+
+# Umgebung fuer Aufrufe, die ins Internet gehen (Key-Download); leer ohne Proxy.
+docker_proxy_env: >-
+  {{ {'http_proxy': kai_http_proxy, 'https_proxy': kai_http_proxy, 'no_proxy': kai_no_proxy}
+  if (kai_http_proxy | default('') | length > 0) else {} }}
 docker_apt_repository: >-
   deb [arch={{ docker_apt_arch }} signed-by={{ docker_apt_keyring }}]
   https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}
   {{ ansible_facts['distribution_release'] }} stable
+# Fuer tasks_from compose_space: Argumente fuer 'docker compose' (Projektverzeichnis, env-Dateien, -f)
+# und der Platz in GB, der unter /var/lib/docker frei sein muss, bevor ein fehlendes Image geladen wird.
+docker_compose_args: ""
+docker_min_free_gb: 5

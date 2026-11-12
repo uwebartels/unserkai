@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# kai-pin-images: pin every image: line in kai/compose/*/compose*.yaml to tag + digest.
+# Modes:
+#   no argument: resolve digests only for images that have none and rewrite in place.
+#   --update: re-resolve all digests (strip an existing @sha256 first).
+#   --check: resolve nothing, print unpinned lines and exit 1 if any.
+#   -h|--help: print this usage and exit 0.
+# Requires registry access for docker buildx imagetools inspect.
+set -euo pipefail
+
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+resolve_digest() {
+  local ref digest
+  ref=$1
+  # Digest of the raw manifest: needs no blob download, so it also works behind a proxy that blocks Docker Hub blobs.
+  if ! digest=$(docker buildx imagetools inspect --raw "$ref" | sha256sum); then
+    printf 'error: could not inspect %s\n' "$ref" >&2
+    exit 1
+  fi
+
+  digest=sha256:${digest%% *}
+  if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    printf 'error: invalid digest for %s: %s\n' "$ref" "$digest" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$digest"
+}
+
+is_pinned() {
+  [[ $1 =~ @sha256:[0-9a-f]{64}$ ]]
+}
+
+process_file() {
+  local -a lines
+  local mode file line base digest new_ref esc found n ref
+  mode=$1
+  file=$2
+  found=0
+  n=0
+
+  mapfile -t lines < "$file"
+  for line in "${lines[@]}"; do
+    n=$((n + 1))
+
+    if [[ $line =~ ^([[:space:]]*image:[[:space:]]*)(.*)$ ]]; then
+      ref=${BASH_REMATCH[2]}
+      ref=${ref%%[[:space:]]*}
+
+      if [[ -z $ref ]]; then
+        printf 'error: empty image reference in %s line %s\n' "$file" "$n" >&2
+        exit 1
+      fi
+
+      if [[ $mode == check ]]; then
+        if ! is_pinned "$ref"; then
+          printf 'unpinned: %s: %s\n' "$file" "$ref"
+          found=1
+        fi
+        continue
+      fi
+
+      if [[ $mode == default ]] && is_pinned "$ref"; then
+        continue
+      fi
+
+      base=${ref%@sha256:*}
+      digest=$(resolve_digest "$base")
+      new_ref=${base}@${digest}
+
+      esc=$new_ref
+      esc=${esc//\\/\\\\}
+      esc=${esc//&/\\&}
+      esc=${esc//|/\\|}
+
+      sed -i "${n}s|^\([[:space:]]*image:[[:space:]]*\).*|\1${esc}|" "$file"
+      printf 'pinned: %s\n' "$new_ref"
+    fi
+  done
+
+  if [[ $mode == check && $found -eq 1 ]]; then
+    return 1
+  fi
+}
+
+case "${1:-}" in
+  "") mode=default ;;
+  --update) mode=update ;;
+  --check) mode=check ;;
+  -h|--help) usage; exit 0 ;;
+  *) printf 'error: unknown option: %s\n' "$1" >&2; exit 2 ;;
+esac
+
+if [[ $# -gt 1 ]]; then
+  printf 'error: too many arguments\n' >&2
+  exit 2
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+shopt -s nullglob
+files=(kai/compose/*/compose*.yaml)
+shopt -u nullglob
+
+if [[ ${#files[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+found=0
+for file in "${files[@]}"; do
+  if ! process_file "$mode" "$file"; then
+    found=1
+  fi
+done
+
+if [[ $mode == check && $found -eq 1 ]]; then
+  exit 1
+fi

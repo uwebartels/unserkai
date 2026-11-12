@@ -1,0 +1,182 @@
+---
+# Rollt den Entry-Stack aus; die .env mit den Geheimnissen legt ein Mensch an.
+- name: Verzeichnisse anlegen
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ kai_entry_install_dir }}"
+    - "{{ kai_entry_install_dir }}/data"
+  loop_control:
+    label: "{{ item }}"
+
+# Besitzer und Rechte setzen die Container selbst (Postgres: Benutzer 999, Modus 0700);
+# die Rolle legt die Verzeichnisse nur an und fasst vorhandene nie an.
+- name: Datenverzeichnisse der Container anlegen
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+  loop:
+    - "{{ kai_entry_install_dir }}/data/open-webui"
+    - "{{ kai_entry_install_dir }}/data/litellm-db"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Compose-Datei kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_entry_src_dir }}/compose.yaml"
+    dest: "{{ kai_entry_install_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Der Filter "Kai-Status" fuer Open WebUI; kai-bootstrap spielt ihn in Open WebUI ein.
+- name: Filter Kai-Status kopieren
+  ansible.builtin.copy:
+    src: "{{ kai_entry_src_dir }}/../../openwebui/kai_status_filter.py"
+    dest: "{{ kai_entry_install_dir }}/kai_status_filter.py"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: LiteLLM-Konfiguration aus Vorlage erzeugen
+  ansible.builtin.template:
+    src: "{{ kai_entry_src_dir }}/litellm.yaml.j2"
+    dest: "{{ kai_entry_install_dir }}/litellm.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: LiteLLM neu starten
+
+- name: Umgebungsdatei stack.env erzeugen
+  ansible.builtin.copy:
+    content: |
+      KAI_WEBUI_BIND={{ kai_webui_bind }}
+      KAI_WEBUI_PORT={{ kai_webui_port }}
+      KAI_LITELLM_BIND={{ kai_litellm_bind }}
+      KAI_LITELLM_PORT={{ kai_litellm_port }}
+    dest: "{{ kai_entry_install_dir }}/stack.env"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_entry_install_dir }}/.env"
+  register: kai_entry_env_stat
+
+# Optionale Vorlage: ein Mensch legt die fertige .env vorab auf der Maschine ab (kai_entry_env_seed).
+# Sie wird nur kopiert, wenn keine .env existiert; eine vorhandene wird nie ueberschrieben, die Vorlage bleibt liegen.
+- name: Vorlage der Umgebungsdatei pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_entry_env_seed }}"
+  register: kai_entry_env_seed_stat
+  when:
+    - kai_entry_env_seed | length > 0
+    - not kai_entry_env_stat.stat.exists
+
+- name: Umgebungsdatei aus der Vorlage anlegen
+  ansible.builtin.copy:
+    src: "{{ kai_entry_env_seed }}"
+    dest: "{{ kai_entry_install_dir }}/.env"
+    remote_src: true
+    force: false
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - kai_entry_env_seed_stat.stat is defined
+    - kai_entry_env_seed_stat.stat.exists
+
+- name: Umgebungsdatei erneut pruefen
+  ansible.builtin.stat:
+    path: "{{ kai_entry_install_dir }}/.env"
+  register: kai_entry_env_stat
+
+- name: Umgebungsdatei vorhanden pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_entry_env_stat.stat.exists
+    fail_msg: >-
+      Die Datei {{ kai_entry_install_dir }}/.env fehlt.
+      Bitte aus kai/compose/entry/.env.example kopieren,
+      Werte eintragen, Modus 0600 setzen und die Rolle erneut ausfuehren.
+      Diese Rolle erstellt oder aendert die .env nicht.
+    quiet: true
+
+- name: Umgebungsdatei auf LLAMA_SWAP_KEY pruefen
+  ansible.builtin.slurp:
+    src: "{{ kai_entry_install_dir }}/.env"
+  register: kai_entry_env_raw
+  no_log: true
+
+- name: LLAMA_SWAP_KEY gesetzt pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_entry_env_raw.content | b64decode is regex('(?m)^LLAMA_SWAP_KEY=\\S+')
+    fail_msg: >-
+      In {{ kai_entry_install_dir }}/.env fehlt LLAMA_SWAP_KEY (Key, den llama-swap auf kai-gpu verlangt;
+      derselbe Wert wie dort, siehe kai/compose/entry/.env.example).
+    quiet: true
+
+- name: Rechte der Umgebungsdatei pruefen
+  ansible.builtin.assert:
+    that:
+      - kai_entry_env_stat.stat.mode == '0600'
+    fail_msg: >-
+      Die Datei {{ kai_entry_install_dir }}/.env hat nicht den Modus 0600.
+      Bitte Modus 0600 setzen und die Rolle erneut ausfuehren.
+    quiet: true
+
+- name: Platz fuer fehlende Images pruefen
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: compose_space
+  vars:
+    docker_compose_args: "{{ kai_entry_compose_args }}"
+    docker_min_free_gb: "{{ kai_entry_min_free_gb }}"
+
+- name: Stack starten
+  ansible.builtin.command:
+    cmd: >-
+      docker compose {{ kai_entry_compose_args }}
+      up -d --wait --wait-timeout {{ kai_entry_wait_timeout }} --quiet-pull
+  register: kai_entry_up
+  changed_when: >-
+    'Started' in kai_entry_up.stderr or
+    'Recreated' in kai_entry_up.stderr or
+    'Created' in kai_entry_up.stderr
+
+- name: Alte Images entfernen
+  ansible.builtin.include_role:
+    name: docker
+    tasks_from: compose_prune
+  when: kai_entry_up is changed
+
+- name: Laufende Dienste anzeigen
+  ansible.builtin.command:
+    cmd: >-
+      docker compose {{ kai_entry_compose_args }}
+      ps --status running --services
+  register: kai_entry_running_services
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Laufende Dienste pruefen
+  ansible.builtin.assert:
+    that:
+      - item in kai_entry_running_services.stdout_lines
+    fail_msg: >-
+      Dienst {{ item }} laeuft nicht.
+      Bitte 'docker compose ps' pruefen.
+    quiet: true
+  when: not ansible_check_mode
+  loop:
+    - open-webui
+    - litellm
+    - litellm-db
+    - brave-mcp

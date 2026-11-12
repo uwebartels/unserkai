@@ -1,0 +1,36 @@
+---
+# Aufruf aus den Stack-Rollen vor 'compose up' (include_role mit tasks_from):
+# fehlt ein Image noch, muss unter /var/lib/docker Platz fuer Download und Entpacken frei sein,
+# denn altes und neues Image liegen beim Wechsel gleichzeitig auf der Platte (AWS-Deployment 2026-11-07).
+- name: Fehlende Images ermitteln
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      docker compose {{ docker_compose_args }} config --images | while read -r image; do
+        docker image inspect --format . "$image" > /dev/null 2>&1 || printf '%s\n' "$image"
+      done
+    executable: /bin/bash
+  register: docker_missing_images
+  changed_when: false
+  check_mode: false
+
+- name: Freien Platz der Docker-Daten ermitteln
+  ansible.builtin.command:
+    cmd: df --output=avail -B1G /var/lib/docker
+  register: docker_free_space
+  changed_when: false
+  check_mode: false
+  when: docker_missing_images.stdout | length > 0
+
+- name: Platz fuer neue Images pruefen
+  ansible.builtin.assert:
+    that:
+      - docker_free_space.stdout_lines[-1] | trim | int >= docker_min_free_gb | int
+    fail_msg: >-
+      Unter /var/lib/docker sind nur {{ docker_free_space.stdout_lines[-1] | trim }} GB frei,
+      fuer die fehlenden Images {{ docker_missing_images.stdout_lines | join(', ') }}
+      braucht es mindestens {{ docker_min_free_gb }} GB.
+      Root-Volume vergroessern (kai/docs/02_anforderungen-infrastruktur.md §1.7)
+      oder Platz schaffen und die Rolle erneut ausfuehren.
+    quiet: true
+  when: docker_missing_images.stdout | length > 0

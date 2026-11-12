@@ -9,7 +9,7 @@ nic.pub
 martin.pub
 ```
 
-Die Dateien werden in `inventory/host_vars/ws-01.yml` eingelesen. Fehlt eine
+Die Dateien werden in `inventory/group_vars/all.yml` eingelesen. Fehlt eine
 Datei, wird der Benutzer trotzdem angelegt, erhaelt aber keinen Key. In dem
 Fall muss der Zugang anders erfolgen (z. B. Passwort setzen).
 

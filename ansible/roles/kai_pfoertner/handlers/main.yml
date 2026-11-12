@@ -1,0 +1,6 @@
+---
+- name: Pfoertner neu starten
+  ansible.builtin.systemd:
+    name: kai-pfoertner
+    state: restarted
+    daemon_reload: true

@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  role_name: kai_updates
+  author: unserkai
+  description: Automatische Sicherheitsupdates inklusive Kernel, verzoegert nach dem Boot
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - system
+dependencies: []

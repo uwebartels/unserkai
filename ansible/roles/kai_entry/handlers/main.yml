@@ -1,0 +1,8 @@
+---
+- name: LiteLLM neu starten
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-directory {{ kai_entry_install_dir }}
+      --env-file {{ kai_entry_install_dir }}/.env --env-file {{ kai_entry_install_dir }}/stack.env
+      restart litellm
+  changed_when: true

@@ -1,0 +1,6 @@
+# Modelle fuer kai-gpu: sha256  Groesse in Bytes  Dateiname  URL
+# Pruefsumme und Groesse stammen aus den LFS-Metadaten des Hugging-Face-Repos
+# (https://huggingface.co/api/models/<repo>/tree/main, Feld lfs.oid). Neue Zeile
+# immer mit der Summe der offiziellen Quelle, nie geraten.
+27cd6c432c7672cb812a92f611cf3ba7bbc35928262bb1e1253ff4ee6ae35901  12109566624  gpt-oss-20b-MXFP4.gguf  https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-MXFP4.gguf
+e150ed544dfe6016930c026a93913a5e3184181ebfe6ab2223ae01dd0491784c  639447744  Qwen3-0.6B-Q8_0.gguf  https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf

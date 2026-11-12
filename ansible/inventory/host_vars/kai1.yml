@@ -1,0 +1,17 @@
+---
+# kai1 in AWS (g4dn.xlarge, NVIDIA T4): Zugang ueber SSM, der Weg steht in ~/.ssh/config (Host = Instanz-ID).
+# Namen und IDs folgen Uwes Terraform (aws/kai1); nie eine IP hier.
+ansible_host: i-0f896ee21e1ae8c72
+ansible_user: admin
+# In AWS muss das Datenvolume da sein; die Rolle bricht sonst ab.
+kai_volume_required: true
+
+# Maschinendaten (kai/docs/03_modellvorschlag.md)
+kai_gpu_vram_gb: 16
+kai_gpu_models:
+  - name: gpt-oss-20b
+    file: gpt-oss-20b-MXFP4.gguf
+    ctx_size: 32768
+    reasoning_effort: medium
+# Das 150-GB-Volume kai-models (ganze Platte), nicht das Instance Storage.
+kai_volume_device: /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0b351d3718d5b2104

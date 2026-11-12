@@ -1,5 +1,6 @@
 ---
 profile: basic
+offline: true
 exclude_paths:
   - .cache/
   - .venv/

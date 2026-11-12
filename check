@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# Step functions are called indirectly via run_step.
+# shellcheck disable=SC2317,SC2329
+set -euo pipefail
+
+cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
+usage() {
+  cat <<EOF
+Usage: check [-h|--help] [--only <step>] [--] [FILE...]
+
+FILE arguments (as passed by it-check) run the whole gate, since every step covers the repository.
+
+Steps: ansible-lint, apt-cache, yamllint, shellcheck, python, compose, templates, gitleaks, private-addresses
+EOF
+}
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing tool: $1" >&2
+    return 1
+  fi
+}
+
+step_ansible-lint() {
+  need ansible-lint || return 1
+  (cd ansible && ansible-lint)
+}
+
+step_apt-cache() {
+  need python3 || return 1
+  local -a files=()
+  mapfile -d '' -t files < <(git ls-files -z -- 'ansible/roles/*/tasks/*.yml' 'ansible/roles/*/handlers/*.yml')
+  if [[ ${#files[@]} -eq 0 ]]; then
+    return 77
+  fi
+  python3 -I ansible/lint/apt_cache.py "${files[@]}"
+}
+
+step_yamllint() {
+  need yamllint || return 1
+  local -a files=()
+  mapfile -d '' -t files < <(git ls-files -z -- 'ansible/*.yml' 'ansible/*.yaml' 'kai/*.yml' 'kai/*.yaml')
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "note: no yamllint files found"
+    return 0
+  fi
+  if [[ -f .yamllint ]]; then
+    yamllint -s "${files[@]}"
+  else
+    yamllint -s -d '{extends: default, rules: {line-length: disable, document-start: disable, truthy: {check-keys: false}, comments: {min-spaces-from-content: 1}}}' "${files[@]}"
+  fi
+}
+
+step_shellcheck() {
+  need shellcheck || return 1
+  local -a files=()
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" ]] || continue
+    [[ "$f" == bootstrap/* || "$f" == aws/* ]] && continue
+    if [[ "$f" == *.sh ]]; then
+      files+=("$f")
+    elif head -n1 "$f" | grep -qE '^#!.*\b(ba)?sh\b'; then
+      files+=("$f")
+    fi
+  done < <(git ls-files -z)
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "note: no shellcheck files found"
+    return 0
+  fi
+  shellcheck -x "${files[@]}"
+}
+
+step_python() {
+  need python3 || return 1
+  local f rc=0 found=0
+  while IFS= read -r -d '' f; do
+    [[ -f "$f" ]] || continue
+    [[ "$f" == bootstrap/* || "$f" == aws/* ]] && continue
+    if [[ "$f" == *.py ]] || head -n1 "$f" | grep -qE '^#!.*\bpython3?\b'; then
+      found=1
+      python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$f" || rc=1
+    fi
+  done < <(git ls-files -z)
+  [[ $found -eq 1 ]] || echo "note: no python files found"
+  return "$rc"
+}
+
+step_compose() {
+  need docker || return 1
+  local -a files=()
+  mapfile -d '' -t files < <(git ls-files -z -- 'kai/compose/*/compose.yaml')
+  if [[ ${#files[@]} -eq 0 ]]; then
+    return 77
+  fi
+  local failed=0 tmp
+  tmp="$(mktemp -d)"
+  for f in "${files[@]}"; do
+    local dir
+    dir="$(dirname "$f")"
+    if [[ ! -f "$dir/.env.example" ]]; then
+      echo "missing $dir/.env.example"
+      failed=1
+      continue
+    fi
+    # env_file: .env verlangt eine .env; die Pruefung nimmt dafuer .env.example.
+    rm -rf "${tmp:?}/stack"
+    mkdir "$tmp/stack"
+    cp "$dir"/* "$dir/.env.example" "$tmp/stack/" 2>/dev/null || true
+    cp "$dir/.env.example" "$tmp/stack/.env"
+    docker compose --project-directory "$tmp/stack" --env-file "$tmp/stack/.env" -f "$tmp/stack/compose.yaml" config -q || failed=1
+    if [[ -f "$dir/compose.cpu.yaml" ]]; then
+      docker compose --project-directory "$tmp/stack" --env-file "$tmp/stack/.env" -f "$tmp/stack/compose.yaml" -f "$tmp/stack/compose.cpu.yaml" config -q || failed=1
+    fi
+  done
+  rm -rf "$tmp"
+  return "$failed"
+}
+
+step_templates() {
+  need ansible || return 1
+  need yamllint || return 1
+  local -a files=()
+  mapfile -d '' -t files < <(git ls-files -z -- 'kai/compose/*/*.yaml.j2')
+  if [[ ${#files[@]} -eq 0 ]]; then
+    return 77
+  fi
+  local tmp failed=0 f dir group
+  tmp="$(mktemp -d)"
+  for f in "${files[@]}"; do
+    dir="$(basename "$(dirname "$f")")"
+    group="kai_$dir"
+    # Jede Vorlage wird fuer alle Hosts ihrer Gruppe gerendert und dann gelintet.
+    if ! (cd ansible && ANSIBLE_BECOME=false ansible "$group" -i inventory/hosts.yml -c local \
+      -m ansible.builtin.template \
+      -a "src=$PWD/../$f dest=$tmp/$dir-{{ inventory_hostname }}.yaml mode=0644") >"$tmp/out" 2>&1; then
+      cat "$tmp/out"
+      failed=1
+    fi
+  done
+  if compgen -G "$tmp/*.yaml" >/dev/null; then
+    yamllint -s -d '{extends: default, rules: {line-length: disable, document-start: disable, truthy: {check-keys: false}}}' "$tmp"/*.yaml || failed=1
+  fi
+  rm -rf "$tmp"
+  return "$failed"
+}
+
+step_gitleaks() {
+  need gitleaks || return 1
+  if gitleaks dir --help >/dev/null 2>&1; then
+    gitleaks dir . --no-banner --redact
+  else
+    gitleaks detect --no-git --source . --no-banner --redact
+  fi
+}
+
+step_private-addresses() {
+  local pattern='(^|[^0-9.])(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
+  local hits
+  # Every tracked and untracked file counts; legitimate hits (the VPC CIDR and the
+  # firewall rules under aws/) are listed as regexes in .check-allow-private-addresses.
+  hits="$(git grep -nIE --untracked "$pattern" -- . ':!.check-allow-private-addresses' || true)"
+  if [[ -n "$hits" && -f .check-allow-private-addresses ]]; then
+    hits="$(echo "$hits" | grep -vEf <(grep -vE '^(#|$)' .check-allow-private-addresses) || true)"
+  fi
+  if [[ -n "$hits" ]]; then
+    echo "private addresses found:"
+    echo "$hits"
+    return 1
+  fi
+  return 0
+}
+
+run_step() {
+  local name="$1"
+  local fn="step_$name"
+  local output rc
+  output="$("$fn" 2>&1)" || rc=$?
+  rc=${rc:-0}
+  case "$rc" in
+  0)
+    echo "[PASS] $name"
+    ;;
+  77)
+    echo "[SKIP] $name (nothing to check)"
+    ;;
+  *)
+    echo "[FAIL] $name"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" | sed 's/^/    /'
+    fi
+    failures=$((failures + 1))
+    ;;
+  esac
+}
+
+main() {
+  local only=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --only)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 2
+      fi
+      only="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      usage >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+    esac
+  done
+  # Remaining arguments are files; the steps scan the whole repository anyway.
+
+  local all_steps=(ansible-lint apt-cache yamllint shellcheck python compose templates gitleaks private-addresses)
+  local failures=0
+
+  if [[ -n "$only" ]]; then
+    local found=0
+    for s in "${all_steps[@]}"; do
+      if [[ "$s" == "$only" ]]; then
+        found=1
+        break
+      fi
+    done
+    if [[ $found -eq 0 ]]; then
+      usage >&2
+      exit 2
+    fi
+    run_step "$only"
+  else
+    for s in "${all_steps[@]}"; do
+      run_step "$s"
+    done
+  fi
+
+  if [[ $failures -eq 0 ]]; then
+    echo "check: all steps passed"
+    exit 0
+  else
+    echo "check: $failures step(s) failed"
+    exit 1
+  fi
+}
+
+main "$@"

@@ -1,16 +1,36 @@
 ---
-- name: Linux-Maschinen konfigurieren
-  hosts: linux
+- name: Kai-Entry konfigurieren
+  hosts: kai_entry
   gather_facts: true
   roles:
     - role: common
       tags: [common, base]
+    - role: kai_updates
+      tags: [kai_updates, base]
     - role: users
       tags: [users]
-      when: users_managed | default([]) | length > 0
+    - role: kai_volume
+      tags: [kai_volume, kai_entry]
     - role: docker
       tags: [docker]
-      when: "'docker_hosts' in group_names"
-    - role: cmake
-      tags: [cmake]
-      when: "'build_hosts' in group_names"
+    - role: kai_pfoertner
+      tags: [kai_pfoertner, kai_entry]
+    - role: kai_entry
+      tags: [kai_entry]
+
+- name: Kai-GPU konfigurieren
+  hosts: kai_gpu
+  gather_facts: true
+  roles:
+    - role: common
+      tags: [common, base]
+    - role: kai_updates
+      tags: [kai_updates, base]
+    - role: users
+      tags: [users]
+    - role: kai_volume
+      tags: [kai_volume, kai_gpu]
+    - role: docker
+      tags: [docker]
+    - role: kai_gpu
+      tags: [kai_gpu]
