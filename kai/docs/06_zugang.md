@@ -1,6 +1,6 @@
 # Kai — Zugang zu Open WebUI, LiteLLM-Admin-UI und llama-swap (bis das VPN steht)
 
-Open WebUI lauscht auf `webui1` nur auf `127.0.0.1:3000`, LiteLLM auf `127.0.0.1:4000`, llama-swap auf `kai1` nur im VPC (Port 8080). Bis Uwe das VPN einrichtet ([02 §5](02_anforderungen-infrastruktur.md)), kommt man über einen SSH-Tunnel durch AWS SSM dran. Der Tunnel ist spürbar zäh; `webui1` selbst antwortet in wenigen Millisekunden.
+Open WebUI (`0.0.0.0:3000`) und LiteLLM (`0.0.0.0:4000`) lauschen auf `webui1` auf allen Schnittstellen, erreichbar nur aus dem VPN, weil die Security Group beide Ports sonst sperrt; llama-swap auf `kai1` nur im VPC (Port 8080). Bis Uwe das VPN einrichtet ([02 §5](02_anforderungen-infrastruktur.md)), kommt man über einen SSH-Tunnel durch AWS SSM dran. Der Tunnel ist spürbar zäh; `webui1` selbst antwortet in wenigen Millisekunden.
 
 ## Einmalig
 
@@ -69,7 +69,7 @@ kai-bootstrap --harness-key MAIL@BEISPIEL:NAME-openclaw
 
 Der Key erscheint genau einmal auf der Konsole und wird nirgends gespeichert; er geht direkt an die Person (bzw. in die Team-KeePass). Ein schon vorhandener Alias wird abgelehnt, nie ersetzt; einen alten Key löscht man bewusst in der LiteLLM-Admin-UI. Open-WebUI-„Direct Connections“ bleiben aus, weil dabei der Key im Browser läge.
 
-LiteLLM hört heute nur auf `127.0.0.1:4000` der Instanz. Wie Harnesses dorthin kommen, ist eine offene Entscheidung für Uwe ([04, Offene Punkte](04_plan.md)): ein zweiter Port in `kai-tunnel` (wie Open WebUI über SSM) oder eine Freigabe für das VPN-CIDR.
+LiteLLM lauscht auf allen Schnittstellen von `webui1` und ist aus dem VPN direkt unter Port 4000 erreichbar; Harnesses brauchen keinen Tunnel, nur einen eigenen virtuellen Key.
 
 ## Auswertung
 
