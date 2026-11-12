@@ -3,10 +3,10 @@
 
 # Der einzige Weg zu kai-gpu: DNS-Name, nie eine IP (Architektur E11).
 kai_gpu_endpoint: "http://kai1.unserkai.de:8080"
-
-# Adresse, auf der Open WebUI (3000) und LiteLLM (4000) lauschen.
-kai_webui_bind: "127.0.0.1"
-kai_litellm_bind: "127.0.0.1"
+# Adresse, auf der Open WebUI (3000) und LiteLLM (4000) lauschen: alle Schnittstellen, weil die Security Group
+# den Zugang auf das VPN begrenzt (kai/docs/01_architektur.md); Harnesses erreichen LiteLLM damit direkt aus dem VPN.
+kai_webui_bind: "0.0.0.0"
+kai_litellm_bind: "0.0.0.0"
 kai_webui_port: 3000
 kai_litellm_port: 4000
 
