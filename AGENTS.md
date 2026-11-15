@@ -23,6 +23,7 @@ Gemeinsames Infrastruktur-Repo von Uwe, Axel, Nic und Martin: AWS-Grundlage mit 
 
 ## Stolperfallen
 
+- Open WebUI zeigt Nutzern der Rolle `user` kein Modell, solange es nicht freigegeben ist; Kai setzt darum `BYPASS_MODEL_ACCESS_CONTROL=true` im Entry-Stack (alle sehen alle Modelle, Architektur §4), also nie Modellrechte je Nutzer in Open WebUI pflegen.
 - Die Nutzung je Person in LiteLLM stimmt nur, solange die E-Mails in Open WebUI und die `user_id` der LiteLLM-Nutzer übereinstimmen, also kommen beide aus derselben `--users-file` von `kai-bootstrap` und eine geänderte Mail muss an beiden Stellen geändert werden; LiteLLM bucht auf die `user_id`, also taugen in der LiteLLM-UI angelegte Nutzer (zufällige `user_id`) dafür nicht.
 - LiteLLM erreicht kai-gpu nur über den Pförtner (`api_base` auf `kai-pfoertner`, Namen aus `/etc/hosts` der Maschine, den die Rolle `kai_pfoertner` vor `kai_entry` schreibt); `kai_pfoertner_enabled: false` stellt direkten Zugriff wieder her und stoppt den Pförtner, `background_health_checks` in LiteLLM bleiben aus, sonst weckt jeder Prüfruf die GPU.
 - Alle Kai-Maschinen tragen Debian 13 (offizielles Debian-Image, Benutzer `admin`, Kernel `cloud-amd64`), also sprechen die Rollen nur `apt` wie im Heim-Setup: Docker CE aus Dockers Repo, auf `kai-gpu` Treiber und Container Toolkit aus NVIDIAs CUDA-Repo mit gepinntem Zweig (`nvidia-driver-pinning-*`), und die Runtime `nvidia` kommt über `docker_daemon_config` in die `daemon.json` der Rolle `docker`, nie per `nvidia-ctk`, damit die Datei genau einen Schreiber hat (Plan 2.8, 2.9).
