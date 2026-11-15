@@ -87,6 +87,7 @@ Was er tut:
 | Modellliste (`/v1/models`) | Aus der Konfiguration beantworten (dieselbe Modellliste, aus der Ansible auch LiteLLM füllt). Weckt nie. |
 | `/health`, `/status` | Selbst beantworten: Zustand jeder Maschine, Phase, Prozent, geschätzte Restzeit, letzte Anfrage, geplanter Stopp. Weckt nie. |
 | `/wake/<maschine>` | Start anstoßen, sofort antworten. Für den Filter in Open WebUI und den Frühstart. |
+| Statusseite `http://<kai-entry>:8082/` (eigener, nur lesender Port, `kai_pfoertner_status_*`) | Für Nutzer: „Kai: läuft / gestört“, Zustand von Open WebUI und LiteLLM, Phase der GPU-Maschine mit Fortschritt; erneuert sich alle 10 s, `/status` dort liefert dasselbe als JSON. Weckt nie, nimmt keine Befehle an. |
 | `/hold/<maschine>?minutes=120` | Haltesperre: in dieser Zeit kein automatischer Stopp. Für Wartung oder Tests, die am Pförtner vorbei direkt mit `kai1` sprechen. |
 
 Warum ein Pförtner *im* Datenweg und nicht nur daneben:

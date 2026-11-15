@@ -22,6 +22,12 @@ Ein Commit ist erst erlaubt, wenn alle Schritte `[PASS]` oder `[SKIP]` melden. `
 
 Arbeitsweise: eigener Branch, Push in den eigenen Fork oder einen Feature-Branch, Pull Request, Review durch eine zweite Person, CI grün, dann Merge.
 
+## Rollout auf webui1 und kai1
+
+- **Deployt wird nur `main`, und `main` ist, was läuft.** Kein Rollout von Feature-Branches auf die AWS-Maschinen; ein offener PR wird gemergt und dann deployt. Hintergrund: am 15.11. rollte ein Deploy von `main` eine nur als Branch ausgerollte Änderung zurück und sperrte den VPN-Zugang.
+- **Kein Deploy während der Nutzung.** `compose up` erzeugt die Container neu, Open WebUI ist dabei etwa eine Minute weg; Rollouts werden angekündigt oder in ein Wartungsfenster gelegt, und `kai-smoke` läuft danach.
+- Vor dem Deploy `gh pr list` prüfen; ist ein offener PR bereits auf der Maschine aktiv, erst mergen.
+
 ## Stufe 3: auf GitHub
 
 `.github/workflows/check.yml` führt `./check` und einen gitleaks-Lauf über die gesamte Historie bei jedem Push und Pull Request aus. Damit hängt die Prüfung nicht davon ab, ob der Hook lokal gesetzt war.

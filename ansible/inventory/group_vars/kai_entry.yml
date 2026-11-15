@@ -34,6 +34,14 @@ kai_pfoertner_min_runtime_minutes: 10
 # Frueher Start, sobald sich jemand in Open WebUI anmeldet (nur im Zeitfenster, z. B. "7-23"; leer = immer).
 kai_pfoertner_wake_on_login: true
 kai_pfoertner_login_window: ""
+# Statusseite fuer Nutzer (nur lesend: Zustand der GPU-Maschine und der Dienste), http://<kai-entry>:8082/.
+# Eigener Port, weil der Hauptport Modellanfragen weiterreicht und intern bleibt; Zugang begrenzt die
+# Security Group (VPN-Bereich auf 8082, Uwe). Leer = aus.
+kai_pfoertner_status_listen: "0.0.0.0"
+kai_pfoertner_status_port: 8082
+kai_pfoertner_status_checks:
+  Open WebUI: "http://127.0.0.1:{{ kai_webui_port }}/health"
+  LiteLLM: "http://127.0.0.1:{{ kai_litellm_port }}/health/liveliness"
 
 # Laeuft staendig, also aktiviert nur ein Neustart einen automatisch installierten Kernel (Rolle kai_updates).
 kai_updates_automatic_reboot: true

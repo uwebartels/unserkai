@@ -24,6 +24,10 @@ kai/bin/kai-tunnel --profile PROFILNAME                                         
 
 Die erste Antwort nach dem Start von `kai1` kann noch etwa 1,5 Minuten dauern, solange das Modell von der Platte lädt; llama-swap lädt es inzwischen schon beim Start vor.
 
+## Statusseite
+
+`http://webui1.unserkai.de:8082/` (im VPN) zeigt, ob Open WebUI und LiteLLM laufen und in welcher Phase `kai1` ist (gestoppt, bootet, Modell wird geladen, bereit). Erster Blick bei „die Seite geht nicht“: ist die Statusseite da, aber Open WebUI nicht, liegt es am Stack; ist auch sie nicht da, liegt es am Weg (VPN, DNS) oder an der Maschine. Die Seite liefert der Pförtner selbst, sie weckt nichts und nimmt keine Befehle an; Port 8082 muss die Security Group für den VPN-Bereich öffnen.
+
 ## Ohne Skript
 
 ```bash
