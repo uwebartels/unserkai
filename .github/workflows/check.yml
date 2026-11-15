@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# The job only reads the repository; GITHUB_TOKEN gets no write access
+# (defence against CI secret stealers such as the wfx-loot campaign, Nov 2026).
+permissions:
+  contents: read
+
 jobs:
   gate:
     runs-on: ubuntu-latest
