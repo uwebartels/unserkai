@@ -3,10 +3,10 @@
 
 # Der einzige Weg zu kai-gpu: DNS-Name, nie eine IP (Architektur E11).
 kai_gpu_endpoint: "http://kai1.unserkai.de:8080"
-
-# Adresse, auf der Open WebUI (3000) und LiteLLM (4000) lauschen.
-kai_webui_bind: "127.0.0.1"
-kai_litellm_bind: "127.0.0.1"
+# Adresse, auf der Open WebUI (3000) und LiteLLM (4000) lauschen: alle Schnittstellen, weil die Security Group
+# den Zugang auf das VPN begrenzt (kai/docs/01_architektur.md); Harnesses erreichen LiteLLM damit direkt aus dem VPN.
+kai_webui_bind: "0.0.0.0"
+kai_litellm_bind: "0.0.0.0"
 kai_webui_port: 3000
 kai_litellm_port: 4000
 
@@ -34,6 +34,14 @@ kai_pfoertner_min_runtime_minutes: 10
 # Frueher Start, sobald sich jemand in Open WebUI anmeldet (nur im Zeitfenster, z. B. "7-23"; leer = immer).
 kai_pfoertner_wake_on_login: true
 kai_pfoertner_login_window: ""
+# Statusseite fuer Nutzer (nur lesend: Zustand der GPU-Maschine und der Dienste), http://<kai-entry>:8082/.
+# Eigener Port, weil der Hauptport Modellanfragen weiterreicht und intern bleibt; Zugang begrenzt die
+# Security Group (VPN-Bereich auf 8082, Uwe). Leer = aus.
+kai_pfoertner_status_listen: "0.0.0.0"
+kai_pfoertner_status_port: 8082
+kai_pfoertner_status_checks:
+  Open WebUI: "http://127.0.0.1:{{ kai_webui_port }}/health"
+  LiteLLM: "http://127.0.0.1:{{ kai_litellm_port }}/health/liveliness"
 
 # Laeuft staendig, also aktiviert nur ein Neustart einen automatisch installierten Kernel (Rolle kai_updates).
 kai_updates_automatic_reboot: true

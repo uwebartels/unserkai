@@ -16,6 +16,9 @@ services:
       OPENAI_API_BASE_URL: http://litellm:4000/v1
       OPENAI_API_KEY: ${OPENWEBUI_LITELLM_KEY}
       ENABLE_OLLAMA_API: "false"
+      # Policy (kai/docs/01_architektur.md §4): every user sees every model and picks one.
+      # Without this, Open WebUI 0.5+ hides models from role "user" until an admin grants them.
+      BYPASS_MODEL_ACCESS_CONTROL: "true"
       # Sends X-OpenWebUI-User-Id/-Email/-Name/-Role to LiteLLM, which books the tokens on that user
       # (user_header_mappings in litellm.yaml); the shared key open-webui stays the same.
       ENABLE_FORWARD_USER_INFO_HEADERS: "true"

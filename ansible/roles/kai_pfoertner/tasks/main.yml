@@ -94,3 +94,14 @@
       until: kai_pfoertner_health.status == 200
       changed_when: false
       when: not ansible_check_mode
+
+    - name: Statusseite des Pfoertners pruefen
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ kai_pfoertner_status_port }}/health"
+        return_content: false
+      register: kai_pfoertner_status_health
+      retries: 5
+      delay: 2
+      until: kai_pfoertner_status_health.status == 200
+      changed_when: false
+      when: not ansible_check_mode and kai_pfoertner_status_listen | length > 0

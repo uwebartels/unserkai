@@ -626,6 +626,11 @@ class KaiPfoertner:
         self.login_log_service = cfg.get("login_log_service", "open-webui")
         self.login_regex = re.compile(cfg.get("login_regex", DEFAULT_LOGIN_REGEX))
         self.login_window = cfg.get("login_window", "")
+        # Read-only status page for users (phases of the machines, health of the entry stack);
+        # separate listener because the main port proxies model requests and must stay internal.
+        self.status_listen = cfg.get("status_listen", "")
+        self.status_port = int(cfg.get("status_port", 8082))
+        self.status_checks = dict(cfg.get("status_checks", {}))
         self.provider = make_provider(cfg)
 
         self.machines = {}
@@ -643,11 +648,23 @@ class KaiPfoertner:
             for model in machine.models:
                 self.model_to_machine.setdefault(model, name)
 
-    def status(self):
-        return {
+    def status(self, with_services=False):
+        result = {
             "machines": {name: m.snapshot() for name, m in self.machines.items()},
             "models": dict(self.model_to_machine),
         }
+        if with_services:
+            result["services"] = {name: self.check_service(url) for name, url in self.status_checks.items()}
+        return result
+
+    @staticmethod
+    def check_service(url):
+        """True when GET url answers 2xx within 3 s; used for the status page only."""
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=3) as resp:
+                return 200 <= resp.status < 300
+        except Exception:
+            return False
 
     def loop(self):
         next_observe = now_mono()
@@ -724,6 +741,11 @@ class KaiPfoertner:
         threading.Thread(target=self.loop, daemon=True).start()
         if self.login_log_service:
             threading.Thread(target=self.login_watcher, daemon=True).start()
+        if self.status_listen:
+            status_server = ThreadingHTTPServer((self.status_listen, self.status_port), make_status_handler(self))
+            status_server.daemon_threads = True
+            threading.Thread(target=status_server.serve_forever, daemon=True).start()
+            logging.info("status page on %s:%s", self.status_listen, self.status_port)
 
         logging.info(
             "listening on %s:%s provider=%s machines=%s",
@@ -1048,6 +1070,115 @@ def make_handler(app):
                     pass
 
     return Handler
+
+
+STATUS_PAGE = """<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta http-equiv="refresh" content="10">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Kai Status</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:40rem;padding:0 1rem;color:#222;background:#fff}
+h1{font-size:1.4rem}table{border-collapse:collapse;width:100%%}td,th{text-align:left;padding:.4rem .6rem;border-bottom:1px solid #ddd}
+.ok{color:#1a7f37}.warn{color:#9a6700}.bad{color:#b42318}.bar{background:#eee;height:.6rem;border-radius:.3rem;overflow:hidden}
+.bar div{background:#1a7f37;height:100%%}small{color:#666}
+</style></head><body>
+<h1>Kai: %(headline)s</h1>
+<table><tr><th>Dienst</th><th>Zustand</th></tr>%(services)s</table>
+<h2>GPU-Maschinen</h2>
+<table><tr><th>Maschine</th><th>Zustand</th><th>Hinweis</th></tr>%(machines)s</table>
+<p><small>Stand %(time)s, Seite erneuert sich alle 10 s. Bei einer gestoppten Maschine startet die erste Chat-Anfrage sie; die erste Antwort braucht dann etwa 2 Minuten.</small></p>
+</body></html>
+"""
+
+
+def html_escape(text):
+    return (
+        str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def render_status_page(status):
+    """Human-readable status page from KaiPfoertner.status(with_services=True)."""
+    services = status.get("services", {})
+    machines = status.get("machines", {})
+    rows = []
+    for name, ok in services.items():
+        cls, text = ("ok", "läuft") if ok else ("bad", "nicht erreichbar")
+        rows.append('<tr><td>%s</td><td class="%s">%s</td></tr>' % (html_escape(name), cls, text))
+    mrows = []
+    for name, snap in machines.items():
+        phase = snap.get("phase", "")
+        label = snap.get("label", phase)
+        cls = "ok" if phase == "ready" else "bad" if phase == "error" else "warn" if phase != "off" else ""
+        hint = ""
+        if phase == "ready" and snap.get("stop_in_seconds") is not None:
+            hint = "stoppt bei Leerlauf in etwa %d min" % max(0, int(snap["stop_in_seconds"]) // 60)
+        elif phase in BANDS and phase != "ready":
+            hint = '<div class="bar"><div style="width:%d%%"></div></div>' % int(snap.get("percent") or 0)
+            if snap.get("eta_seconds") is not None:
+                hint += "<small>noch etwa %d s</small>" % max(0, int(snap["eta_seconds"]))
+        elif phase == "error" and snap.get("error"):
+            hint = html_escape(snap["error"])
+        elif phase == "off":
+            hint = "startet bei der ersten Anfrage"
+        mrows.append(
+            '<tr><td>%s</td><td class="%s">%s</td><td>%s</td></tr>'
+            % (html_escape(name), cls, html_escape(label), hint)
+        )
+    all_ok = all(services.values()) if services else True
+    headline = "läuft" if all_ok else "gestört"
+    return STATUS_PAGE % {
+        "headline": headline,
+        "services": "".join(rows) or '<tr><td colspan="2"><small>keine Dienste konfiguriert</small></td></tr>',
+        "machines": "".join(mrows),
+        "time": time.strftime("%H:%M:%S"),
+    }
+
+
+def make_status_handler(app):
+    """Read-only handler for the user-facing status port: GET / (HTML), /status (JSON), /health."""
+
+    class StatusHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):
+            logging.debug("%s - %s", self.address_string(), fmt % args)
+
+        def send_body(self, status, body, content_type):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            try:
+                path = urllib.parse.urlsplit(self.path).path
+                if path == "/health":
+                    self.send_body(200, b'{"ok": true}', "application/json")
+                elif path == "/status":
+                    body = json.dumps(app.status(with_services=True)).encode("utf-8")
+                    self.send_body(200, body, "application/json")
+                elif path in ("/", "/index.html"):
+                    body = render_status_page(app.status(with_services=True)).encode("utf-8")
+                    self.send_body(200, body, "text/html; charset=utf-8")
+                else:
+                    self.send_body(404, b'{"error": "not found"}', "application/json")
+            except Exception as exc:
+                logging.exception("status request failed")
+                try:
+                    self.send_body(500, json.dumps({"error": str(exc)}).encode("utf-8"), "application/json")
+                except Exception:
+                    pass
+
+        def do_POST(self):
+            self.send_body(405, b'{"error": "read-only"}', "application/json")
+
+        do_PUT = do_POST
+        do_DELETE = do_POST
+
+    return StatusHandler
 
 
 def request_json(method, url):

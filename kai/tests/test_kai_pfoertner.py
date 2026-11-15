@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -377,6 +378,35 @@ class KaiPfoertnerEndToEndTest(unittest.TestCase):
             headers={"Authorization": "Bearer sk-test"})
         self.assertEqual(status, 200, body)
         self.assertEqual(self.backend.loaded_models(), {"b"})
+
+    def test_status_page_is_read_only(self):
+        status_port = free_port()
+        self.start_app(self.make_config(app={
+            "status_listen": "127.0.0.1", "status_port": status_port,
+            "status_checks": {"Backend": self.backend.url + "/health", "Nichts": "http://127.0.0.1:1/"},
+        }))
+        server = ThreadingHTTPServer(("127.0.0.1", status_port), kai_pfoertner.make_status_handler(self.app))
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+
+        with urllib.request.urlopen("http://127.0.0.1:%d/" % status_port, timeout=15) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/html", resp.headers["Content-Type"])
+            page = resp.read().decode("utf-8")
+        self.assertIn("kai1", page)
+        self.assertIn("gestoppt", page)
+        self.assertIn("Kai: gestört", page)  # "Nichts" is unreachable
+
+        with urllib.request.urlopen("http://127.0.0.1:%d/status" % status_port, timeout=15) as resp:
+            obj = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(obj["services"], {"Backend": True, "Nichts": False})
+
+        req = urllib.request.Request("http://127.0.0.1:%d/wake/kai1" % status_port, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=15)
+        self.assertEqual(ctx.exception.code, 405)
+        self.assertEqual(self.status_snapshot()["machines"]["kai1"]["phase"], "off")
+        server.shutdown()
 
     def test_models_endpoint_does_not_wake(self):
         self.start_app(self.make_config())
